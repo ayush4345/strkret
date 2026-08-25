@@ -1,0 +1,9 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/privacy-client" },
+    { "path": "packages/agent-core" },
+    { "path": "agents/provider" },
+    { "path": "agents/consumer" }
+  ]
+}
