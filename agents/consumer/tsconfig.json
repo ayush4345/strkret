@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  "references": [
+    { "path": "../../packages/agent-core" },
+    { "path": "../../packages/privacy-client" },
+    { "path": "../provider" }
+  ],
+  "include": ["src"]
+}
