@@ -59,25 +59,37 @@ the provider actually receives exactly the on-chain-computed settlement.
 Not a mock — the real pool contract source, invoking this contract for
 real, with a signature the on-chain check actually verifies.
 
-## Deploying for real: one thing only the pool operator can grant
+**Verified again on real Sepolia** (`agents/consumer/src/demo-invoke-sepolia.ts`,
+`pnpm --filter @strkret/agent-consumer run demo:invoke-sepolia`), against
+this deployment, using the consumer's real account key rather than a test
+vector. Succeeded on the first real attempt — tx
+`0x3f3fec75f0e64e079788e08e7a365a1d631cd9863142d248faea597a13221e6`,
+provider's note independently confirmed at exactly `500` (the on-chain
+settlement) via `discoverNotes()`, not just this script's own say-so.
 
-STRK20's screening rule: an `Invoke` target that funds open notes and
-carries no policy becomes the transaction's screening subject, so the pool
-demands a screening attestation naming the anonymizer itself — which
-nothing here can produce. The devnet demo works around this by calling
-`set_open_note_screening_policy(anonymizer, Exempt)` using **devnet's own
-admin account**, which we don't have on Sepolia or mainnet. A real
-deployment needs whoever holds `AppGovernor` on the target pool to grant
-this exemption for this contract's address — that has to be requested from
-the STRK20 team, the same channel as the prover/indexer ask.
+## Open-note screening
+
+STRK20's documented rule: an `Invoke` target that funds open notes and
+carries no policy becomes the transaction's screening subject, and the pool
+is supposed to demand a screening attestation naming the anonymizer itself.
+We expected this to block an unexempted contract on a real pool — it
+didn't; the Sepolia run above succeeded with no exemption ever granted, no
+attestation supplied. Either this pool's default policy for an unlisted
+address isn't what the docs implied, or screening applies under narrower
+conditions than we assumed. **Don't take this as "screening doesn't
+matter"** — it's evidence for exactly one configuration on Sepolia, not
+a general finding, and it's specifically the kind of thing that needs
+independent verification (not just re-reading this paragraph) before
+mainnet: confirm the actual policy state for this contract's mainnet
+address before relying on the same outcome there.
 
 ## Sepolia
 
-Declared and deployed, unreviewed, **not yet exempted from screening** (see
-above — invoking it for real will fail until that's granted):
+Declared, deployed, and **invoked for real** — see above.
 
 - Class hash: `0x661a6cd77f20de9c18dcc2c701ebacbcb255fc315841be58d13f473ea2b4574`
 - Contract address: `0x01d50cb0d1fa94d5912b62b42d64e7ff3d49f517f7b137f3a05daf7641cc9c4f`
+- Settle tx: `0x3f3fec75f0e64e079788e08e7a365a1d631cd9863142d248faea597a13221e6`
 
 ## Dependency pinning
 
