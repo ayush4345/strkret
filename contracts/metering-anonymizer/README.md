@@ -69,19 +69,25 @@ settlement) via `discoverNotes()`, not just this script's own say-so.
 
 ## Open-note screening
 
-STRK20's documented rule: an `Invoke` target that funds open notes and
-carries no policy becomes the transaction's screening subject, and the pool
-is supposed to demand a screening attestation naming the anonymizer itself.
-We expected this to block an unexempted contract on a real pool — it
-didn't; the Sepolia run above succeeded with no exemption ever granted, no
-attestation supplied. Either this pool's default policy for an unlisted
-address isn't what the docs implied, or screening applies under narrower
-conditions than we assumed. **Don't take this as "screening doesn't
-matter"** — it's evidence for exactly one configuration on Sepolia, not
-a general finding, and it's specifically the kind of thing that needs
-independent verification (not just re-reading this paragraph) before
-mainnet: confirm the actual policy state for this contract's mainnet
-address before relying on the same outcome there.
+The unexempted default (`OpenNoteScreeningPolicy::Required`, per
+`privacy::objects`) doesn't mean "blocked until a pool operator manually
+allowlists you" — it means "screened automatically via FPI on every proof,
+same as any depositor." The SDK's proving-service client documents this
+directly: every proof carries an optional attestation "for screened
+deposits," attached transparently by the hosted prover, which calls FPI
+itself. The Sepolia run above never needed a manual exemption because the
+hosted prover (`transaction-prover.alpha-sepolia.sw-dev.io`, the one the
+STRK20 team gave us) requested and attached that attestation on its own —
+nothing in our code or the contract does anything screening-related. Our
+address just wasn't flagged by whatever FPI actually checks.
+
+That also explains why the **devnet** demo needs the manual
+`set_open_note_screening_policy(..., Exempt)` call: devnet has no real FPI
+to call, so nothing would pass screening there without it — that workaround
+is for the test environment's sake, not evidence production needs the same
+manual step. Still worth confirming this holds for whatever prover mainnet
+ends up using, since "the hosted prover handles it" is a property of that
+specific prover, not of the contract.
 
 ## Sepolia
 
