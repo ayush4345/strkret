@@ -2,3 +2,7 @@ node_modules/
 dist/
 .env
 *.tsbuildinfo
+
+# Cairo/Scarb build artifacts (contracts/)
+target/
+.snfoundry_cache/

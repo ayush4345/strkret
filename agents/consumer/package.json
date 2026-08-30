@@ -12,14 +12,16 @@
     "build": "tsc -b",
     "clean": "rm -rf dist *.tsbuildinfo",
     "demo": "tsx src/demo.ts",
-    "demo:devnet": "tsx src/demo-devnet.ts"
+    "demo:devnet": "tsx src/demo-devnet.ts",
+    "demo:invoke-devnet": "tsx src/demo-invoke-devnet.ts"
   },
   "dependencies": {
+    "@starkware-libs/starknet-privacy-sdk": "^0.14.3-rc.5",
     "@strkret/agent-core": "workspace:*",
     "@strkret/agent-provider": "workspace:*",
     "@strkret/privacy-client": "workspace:*",
-    "@starkware-libs/starknet-privacy-sdk": "^0.14.3-rc.5",
-    "dotenv": "^16.4.5"
+    "dotenv": "^16.4.5",
+    "starknet": "10.5.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
