@@ -21,6 +21,35 @@ each call, accumulates what's owed over a session, and the consumer settles
 the total with one ordinary-looking `transfer()` call into the pool. The
 confidentiality guarantee comes from STRK20, not from a bespoke circuit.
 
+## Anonymizer contract: `settlement` public, correctness enforced
+
+A STRK20 anonymizer (`privacy_invoke`) contract lives at
+[`contracts/metering-anonymizer`](contracts/metering-anonymizer) — **draft,
+unreviewed**, deployed and verified end-to-end on Sepolia (see that
+package's README for the review still needed before mainnet). It's an
+alternative settlement path to
+the plain `transfer()` above, not a replacement: it verifies the consumer's
+signed usage voucher and the `rate_commitment` on-chain, computes
+`settlement = total_units × rate` itself, and splits the escrowed deposit
+into `settlement -> provider` and `refund -> consumer` in one atomic call —
+restoring the on-chain-enforced correctness the original circuit-based
+design had, which a bare `transfer()` doesn't give you.
+
+The real tradeoff, worth stating precisely: `privacy_invoke`'s output lands
+in a public-amount "open note" — structural, not a workaround. So this path
+makes the **settlement amount** public to get that enforcement (matching
+the original Stellar design's privacy level on amount), while still hiding
+consumer/provider **identity** better than that original design did (it
+published depositor/provider addresses as public signals; open notes hide
+the owner). Plain `transfer()` above still hides the settlement amount too
+and is the better choice when correctness-enforcement isn't worth that.
+
+We didn't need a shadow account for the provider-gets-`owed`,
+depositor-keeps-the-remainder split, either way — `surplusTo(...)` (plain
+`transfer()` path) and the two-`OpenNoteDeposit` return (anonymizer path)
+both give that for free from primitives that already exist for other
+reasons.
+
 ## How it fits together
 
 ```
