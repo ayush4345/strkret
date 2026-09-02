@@ -206,7 +206,7 @@ pnpm --filter @strkret/agent-consumer run demo
 - [x] Verified end-to-end on real Sepolia — both settlement paths: plain
       `transfer()` (`demo.ts`) and the anonymizer contract
       (`demo-invoke-sepolia.ts`)
-- [x] Anonymizer contract (`contracts/metering-anonymizer`) — draft, 7/7
+- [x] Anonymizer contract (`contracts/metering-anonymizer`) — draft, 8/8
       tests pass, verified on devnet and Sepolia; still needs a security
       review before mainnet (see that package's README)
 - [x] Incremental vouchers with a per-channel high-water mark, so a

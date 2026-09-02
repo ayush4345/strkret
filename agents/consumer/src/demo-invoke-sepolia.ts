@@ -22,7 +22,7 @@ import { Open } from "@starkware-libs/starknet-privacy-sdk";
 import { createPrivacyClient } from "@strkret/privacy-client";
 import { env } from "./env.js";
 
-const ANONYMIZER_ADDRESS = "0x06623cb10adc1ddd5511e6e19ee466943f7d7ce18d1703ca1a3b809a61cbd7a4";
+const ANONYMIZER_ADDRESS = "0x0507f521cfe282d8992caf6047eaee614690ea707eee28e8b6018145ce4cd1e6";
 
 async function waitBlocks(client: Awaited<ReturnType<typeof createPrivacyClient>>, blocks: number): Promise<void> {
   const target = (await client.provider.getBlockNumber()) + blocks;

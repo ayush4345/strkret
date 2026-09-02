@@ -73,12 +73,15 @@ pub mod MeteringAnonymizer {
     #[storage]
     struct Storage {
         /// Per-channel high-water mark: the highest `total_units` already
-        /// settled on that channel. A voucher is spendable only if it is
-        /// strictly newer, which subsumes plain replay (an identical voucher
-        /// is no longer greater) while also blocking the subtler attack that
-        /// incremental vouchers open up — settling a stale, smaller voucher
-        /// from the same channel against a fresh escrow deposit after a
-        /// larger one has already been paid.
+        /// settled on that channel, keyed by
+        /// `poseidon(consumer_pubkey, channel_id)` so that channels are
+        /// isolated per consumer rather than shared across everyone who
+        /// picks the same caller-chosen `channel_id`. A voucher is spendable
+        /// only if it is strictly newer, which subsumes plain replay (an
+        /// identical voucher is no longer greater) while also blocking the
+        /// subtler attack that incremental vouchers open up — settling a
+        /// stale, smaller voucher from the same channel against a fresh
+        /// escrow deposit after a larger one has already been paid.
         ///
         /// This is the one piece of state this contract keeps; it never
         /// holds funds across transactions (everything received is routed
@@ -130,9 +133,18 @@ pub mod MeteringAnonymizer {
             // Only the units beyond what this channel has already settled
             // are payable. The strict `>` both rejects replays and keeps the
             // subtraction below from underflowing.
-            let already_settled = self.settled_units.read(channel_id);
+            //
+            // The mark is keyed by (consumer_pubkey, channel_id), not
+            // channel_id alone: `channel_id` is caller-chosen and carries no
+            // identity of its own, so keying on it alone would let two
+            // consumers who happened to pick the same value share a mark and
+            // cap or block each other's settlements. Binding it to the
+            // pubkey the signature above was just verified against isolates
+            // each consumer's channels to that consumer.
+            let channel_key = poseidon_hash_span([consumer_pubkey, channel_id].span());
+            let already_settled = self.settled_units.read(channel_key);
             assert(total_units > already_settled, errors::VOUCHER_ALREADY_USED);
-            self.settled_units.write(channel_id, total_units);
+            self.settled_units.write(channel_key, total_units);
 
             // Escrow was already sent to us by the pool before this call —
             // read it from our own balance rather than trust a calldata
