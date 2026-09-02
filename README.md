@@ -52,13 +52,41 @@ reasons.
 
 ## How it fits together
 
-```
-consumer agent                          provider agent
-  MeteredSession.call() ×N  ─────────►  EchoService.price()/.handle()
-        │  (off-chain, instant, no chain call per unit)
-        ▼
-  session.owed  ──────────────────────► one STRK20 private transfer
-                                          (register → deposit → transfer)
+```mermaid
+sequenceDiagram
+    participant C as Consumer process
+    participant P as Provider process (HTTP :4021)
+    participant Pool as STRK20 Privacy Pool
+    participant Anon as Metering Anonymizer (optional)
+
+    Note over P,Pool: on-chain, once ever
+    P->>Pool: register() — publish viewing key
+
+    Note over C,P: off-chain metering — real HTTP, two separate OS processes
+    C->>P: GET /terms
+    P-->>C: { rate }
+    loop N calls
+        C->>P: POST /call { prompt }
+        P-->>C: { completion, cost }
+    end
+    Note over C: owed = Σ cost
+
+    Note over C,Pool: on-chain settlement
+    C->>Pool: approve + deposit(escrowAmount)
+    Note over C,Pool: wait 10 blocks — note maturity
+
+    alt plain transfer — default, full privacy
+        C->>Pool: transfer(owed)
+        Pool-->>P: encrypted note credited
+        Note over C,P,Pool: amount, sender, recipient all hidden — only a nullifier appears
+    else anonymizer contract — on-chain enforced correctness
+        C->>Pool: withdraw(escrowAmount) → Anon
+        Pool->>Anon: privacy_invoke(voucher, signature, rate_commitment)
+        Anon-->>Pool: OpenNoteDeposit × 2
+        Pool-->>P: settlement (amount now public)
+        Pool-->>C: refund (amount now public)
+        Note over Anon,Pool: identity still hidden — only the amount is public
+    end
 ```
 
 A pnpm workspace, TypeScript project references throughout:
@@ -76,15 +104,20 @@ A pnpm workspace, TypeScript project references throughout:
   approve → deposit → meter → wait-for-maturity → settle flow, generic over
   whatever `Service` and `PrivacyClient`s it's given.
 - **`agents/provider`** (`@strkret/agent-provider`) — owns the concrete
-  `EchoService`, the deterministic demo service. The provider prices
-  independently and never trusts a consumer-claimed cost.
+  `EchoService`, the deterministic demo service, and `server.ts`: runs the
+  provider as its own HTTP process (`GET /terms`, `POST /call`). The
+  provider prices independently and never trusts a consumer-claimed cost.
 - **`agents/consumer`** (`@strkret/agent-consumer`) — `demo.ts` runs
   `runSession` against real infra (RPC, Sepolia or mainnet, a real prover +
   indexer) from the repo-root `.env`, and writes `strk20.json`.
   `demo-devnet.ts` runs the same flow against a disposable local Starknet
-  devnet with the real privacy pool contract deployed — no external
-  services, no `.env`. That's the fast dev loop; `demo.ts` is what actually
-  counts for submission.
+  devnet — no external services, no `.env`. `demo-networked-devnet.ts` is
+  the same again, except the provider is a genuinely separate OS process
+  (`remote-echo-service.ts` talks to it over real HTTP instead of calling
+  `EchoService` in-process) — spawned automatically so it's still one
+  command, but it's two real processes underneath, not two classes in one.
+  `demo.ts` / `demo-devnet.ts` are what actually count for submission;
+  the others are dev loops and architecture demonstrations.
 
 ## Running it against a local devnet (no credentials needed)
 
@@ -116,6 +149,20 @@ and are worth knowing about if you hit them again after a dependency bump:
   trial) does the same thing and actually works — see the `onWaitTick` hook
   in `demo-devnet.ts`.
 
+**Networked variant** — same on-chain flow, but the provider runs as its
+own process and the consumer talks to it over real HTTP:
+
+```bash
+pnpm --filter @strkret/agent-consumer run demo:networked-devnet
+```
+
+This spawns `agent-provider`'s `serve` script as a child process (so it's
+still one command, and a judge doesn't need two terminals to see it work),
+waits for `GET /terms` to respond, then runs the consumer against it
+exactly like `demo:devnet` — except every metered call is a real
+`POST /call` over `localhost`, not an in-process method call. Two real OS
+processes, real HTTP between them; the script just starts both for you.
+
 ## Running it for real (Sepolia or mainnet)
 
 ```bash
@@ -130,11 +177,16 @@ pnpm --filter @strkret/agent-consumer run demo
   [strk20-by-example.org](https://strk20-by-example.org) first. Don't guess
   these; a wrong pool address fails silently in confusing ways. Mainnet pool:
   `0x040337b1af3c663e86e333bab5a4b28da8d4652a15a69beee2b677776ffe812a`.
-- `PROVING_SERVICE_URL` / `INDEXER_URL` — there's no publicly documented
-  hosted prover/indexer for Sepolia or mainnet as of this writing. Either
-  self-host the Docker images from `starkware-libs/starknet-privacy`, or ask
-  in their Telegram (linked from the skill docs) for hosted endpoints.
-  **This is the actual blocker on a real run right now**, not the code.
+- `PROVING_SERVICE_URL` / `INDEXER_URL` — we have working Sepolia values for
+  these (from the STRK20 team directly, not publicly documented — ask in
+  their Telegram, linked from the skill docs, if you need your own). **The
+  same ask for mainnet is still pending** and is the actual blocker on a
+  real mainnet run right now, not the code — both settlement paths already
+  ran successfully on Sepolia with these (see `demo-invoke-sepolia.ts` and
+  its real tx hash in `contracts/metering-anonymizer/README.md`; the plain
+  `transfer()` path via `demo.ts` was verified the same way). Self-hosting
+  the Docker images from `starkware-libs/starknet-privacy` is the fallback
+  if you don't have either.
 - `CONSUMER_VIEWING_KEY` / `PROVIDER_VIEWING_KEY` — must be a decimal
   `BigInt` string, not hex. A hex string compiles fine but derives the wrong
   channel keys, and notes sent to that account never decrypt.
@@ -151,14 +203,32 @@ pnpm --filter @strkret/agent-consumer run demo
 - [x] Metering + settlement logic against the Privacy SDK
 - [x] Verified end-to-end against a local devnet (real pool contract, real
       register/deposit/transfer, real proofs)
-- [ ] Prover + indexer endpoint for Sepolia/mainnet (see above — the actual
-      blocker on a real run)
+- [x] Verified end-to-end on real Sepolia — both settlement paths: plain
+      `transfer()` (`demo.ts`) and the anonymizer contract
+      (`demo-invoke-sepolia.ts`)
+- [x] Anonymizer contract (`contracts/metering-anonymizer`) — draft, 7/7
+      tests pass, verified on devnet and Sepolia; still needs a security
+      review before mainnet (see that package's README)
+- [x] Incremental vouchers with a per-channel high-water mark, so a
+      provider holds a running off-chain claim and settlement pays only the
+      delta — verified on Sepolia (`demo-incremental-sepolia.ts`). The pool
+      charges a flat ~6 STRK per `apply_actions` on mainnet, so per-call
+      on-chain payment isn't viable; metering stays off-chain, settlement
+      batches.
+- [x] Two separate OS processes talking over real HTTP for the off-chain
+      metering loop (`demo-networked-devnet.ts`) — not the x402 protocol
+      specifically (no `402`/`X-PAYMENT` handshake), but genuinely two
+      processes, not two classes in one
+- [x] Mainnet prover — Starkscan's STRK20 prover relay, via the adapter in
+      `packages/privacy-client/src/starkscan-prover.ts` (their API is
+      pilot-phase: 10 proofs/day per key, and `deploy_account` isn't
+      served by their RPC)
+- [ ] Mainnet indexer/discovery endpoint — Starkscan doesn't offer one;
+      still an open ask with the STRK20 team, and the remaining blocker on
+      a full mainnet deposit → settle run
 - [ ] Mainnet pool/token addresses confirmed and filled into `.env`
 - [ ] Real run producing the 3 mainnet transaction hashes in `strk20.json`
 - [ ] Live demo URL + demo video
-- [ ] x402-style networked handshake between two separate agent processes
-      (this demo runs both sides in-process for now — see
-      `packages/agent-core/src/session.ts`)
 
 ## License
 
