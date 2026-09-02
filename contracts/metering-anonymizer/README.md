@@ -18,11 +18,36 @@ settlement public, correctness enforced" section for the full reasoning.
 2. The consumer's own STARK-curve signature over
    `poseidon(channel_id, total_units)` — proof the consumer, not the
    provider, authorized paying for exactly `total_units`.
-3. The signed voucher hasn't been used before (`used_vouchers` map, keyed by
-   the message hash) — replay protection, since this contract is otherwise
-   stateless.
-4. `settlement = total_units * rate <= escrow_amount` (escrow measured from
-   this contract's own token balance, never trusted as a calldata argument).
+3. The voucher is strictly newer than this channel's high-water mark
+   (`settled_units` map, keyed by `channel_id`) — see below.
+4. `settlement = (total_units - already_settled) * rate <= escrow_amount`
+   (escrow measured from this contract's own token balance, never trusted
+   as a calldata argument).
+
+## Incremental vouchers and the high-water mark
+
+`total_units` is **cumulative for the channel**, not per-settlement. That is
+what lets vouchers be incremental: the consumer signs a fresh voucher for
+the running total as metering proceeds, each superseding the last, so the
+provider holds an enforceable claim for everything served so far without a
+single chain interaction. Settlement then pays only the units beyond what
+that channel has already settled.
+
+This is what makes the economics work at all. The pool charges a flat
+protocol fee per `apply_actions` call (6 STRK on mainnet, read live from
+`get_fee_amount()`), so settling per API call is not viable at any sane
+per-call price. Metering stays off-chain and per-call; only settlement
+touches the chain, and it can then be batched or threshold-triggered.
+
+The guard is a per-channel **high-water mark** rather than a set of spent
+voucher hashes, and that distinction is load-bearing. A `used_vouchers` set
+keyed by `poseidon(channel_id, total_units)` stops an *identical* voucher
+being replayed, but incremental vouchers open a subtler hole: vouchers
+`(ch, 100)` and `(ch, 150)` hash differently, so after settling at 150 the
+older-but-still-validly-signed 100 voucher could be settled again against a
+fresh escrow on the same channel. Requiring `total_units > settled_units`
+subsumes plain replay and closes that hole, and the strict `>` is also what
+keeps the settlement subtraction from underflowing.
 
 ## Security review needed before any deploy
 
@@ -35,16 +60,20 @@ settlement public, correctness enforced" section for the full reasoning.
   way that would leak `rate`/`rate_blind` even though they never appear in
   a public signal — this wasn't independently verified before writing this
   contract.
-- Confirm the replay guard's key (the signed message hash) can't collide
-  across different consumers or channels in a way that blocks a legitimate
-  second voucher.
-- Arithmetic: `total_units * rate` relies on Cairo's default checked u128
-  multiplication (panics on overflow) — confirm this holds for the actual
-  deployed Cairo/Scarb version, don't just trust this comment.
+- Confirm the high-water mark's key (`channel_id` alone) can't collide
+  across different consumers — two consumers picking the same `channel_id`
+  would share a mark, letting one block or cap the other's settlements.
+  `channel_id` is currently caller-chosen and unbound to any identity;
+  binding it to the consumer's pubkey is the obvious hardening if this
+  survives review.
+- Arithmetic: `(total_units - already_settled) * rate` relies on Cairo's
+  default checked u128 multiplication (panics on overflow) — confirm this
+  holds for the actual deployed Cairo/Scarb version, don't just trust this
+  comment. The subtraction is guarded by the strict `>` check above.
 
 ## Testing
 
-`snforge test` — 5 tests, including a happy-path case using a real
+`snforge test` — 7 tests, including a happy-path case using a real
 STARK-curve signature generated with starknet.js (the same library the
 production TS client uses) for `private_key = 0x1`, verified correctly by
 the on-chain `check_ecdsa_signature` call. That's evidence the signing and
@@ -92,6 +121,30 @@ specific prover, not of the contract.
 ## Sepolia
 
 Declared, deployed, and **invoked for real** — see above.
+
+Current deployment (with the per-channel high-water mark):
+
+- Class hash: `0x4b431fe16b17b7bc74d9322917feefefc27fc0f81a9f599eff9cbc87134b261`
+- Contract address: `0x06623cb10adc1ddd5511e6e19ee466943f7d7ce18d1703ca1a3b809a61cbd7a4`
+- Declare tx: `0xe9ae0991c00edb00ac05a65dbecb00f531dface573489d2f4c2e4187490192`
+- Deploy tx: `0x02a90af57dfc6cf54778ac1028b90ed18ba316ca46df5ff22beaf7bb5ef5040a`
+
+**Incremental settlement verified on real Sepolia**
+(`agents/consumer/src/demo-incremental-sepolia.ts`,
+`pnpm --filter @strkret/agent-consumer run demo:incremental-sepolia`): two
+settlements on the same `channel_id`, the second carrying a cumulative
+voucher, with the provider's credited amount read back from
+`discoverNotes()` between rounds rather than trusted from the script.
+
+- Round 1, cumulative `100` against a mark of `0` — settle tx
+  `0x6f49d1ac64c1b1eec6e51ba5d736d48366dff3ae836e78ca879b3c99107e284`,
+  provider credited `+500`.
+- Round 2, cumulative `150` against a mark of `100` — settle tx
+  `0x21637073f597df1ec02b7bf171e7c5f85ae8ef59afbc1f36005cec364a20d32`,
+  provider credited `+250`, the 50-unit delta rather than the cumulative
+  `750` a naive reading would pay.
+
+Previous deployment, before the high-water mark (single-settlement only):
 
 - Class hash: `0x661a6cd77f20de9c18dcc2c701ebacbcb255fc315841be58d13f473ea2b4574`
 - Contract address: `0x01d50cb0d1fa94d5912b62b42d64e7ff3d49f517f7b137f3a05daf7641cc9c4f`

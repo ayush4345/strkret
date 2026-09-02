@@ -20,7 +20,11 @@ pub trait IMeteringAnonymizer<T> {
     /// - `rate`, `rate_blind`: private witnesses. Must hash to
     ///   `rate_commitment` (published off-chain, at channel open).
     /// - `channel_id`, `total_units`: the metered session's identity and the
-    ///   consumer-authorized usage count.
+    ///   consumer-authorized usage count. `total_units` is CUMULATIVE for the
+    ///   channel, not per-settlement — vouchers are incremental, each
+    ///   superseding the last, so a provider can hold an enforceable claim
+    ///   for everything served so far without touching the chain. Only the
+    ///   units not already settled on this channel get paid out here.
     /// - `consumer_pubkey`, `sig_r`, `sig_s`: the consumer's STARK-curve
     ///   signature over `poseidon(channel_id, total_units)` — proof the
     ///   consumer, not the provider or anyone else, authorized paying for
@@ -68,14 +72,20 @@ pub mod MeteringAnonymizer {
 
     #[storage]
     struct Storage {
-        /// message_hash = poseidon(channel_id, total_units) of every voucher
-        /// already settled — stops the same signed voucher being replayed
-        /// against a fresh escrow deposit. This is the one piece of state
-        /// this contract keeps; it never holds funds across transactions
-        /// (everything received is routed out in the same call), so the
-        /// stateless-helper "stay permissionless" guidance still applies —
-        /// no pool address needs pinning here.
-        used_vouchers: Map<felt252, bool>,
+        /// Per-channel high-water mark: the highest `total_units` already
+        /// settled on that channel. A voucher is spendable only if it is
+        /// strictly newer, which subsumes plain replay (an identical voucher
+        /// is no longer greater) while also blocking the subtler attack that
+        /// incremental vouchers open up — settling a stale, smaller voucher
+        /// from the same channel against a fresh escrow deposit after a
+        /// larger one has already been paid.
+        ///
+        /// This is the one piece of state this contract keeps; it never
+        /// holds funds across transactions (everything received is routed
+        /// out in the same call), so the stateless-helper "stay
+        /// permissionless" guidance still applies — no pool address needs
+        /// pinning here.
+        settled_units: Map<felt252, u128>,
     }
 
     #[constructor]
@@ -117,8 +127,12 @@ pub mod MeteringAnonymizer {
             );
             assert(valid, errors::BAD_SIGNATURE);
 
-            assert(!self.used_vouchers.read(message_hash), errors::VOUCHER_ALREADY_USED);
-            self.used_vouchers.write(message_hash, true);
+            // Only the units beyond what this channel has already settled
+            // are payable. The strict `>` both rejects replays and keeps the
+            // subtraction below from underflowing.
+            let already_settled = self.settled_units.read(channel_id);
+            assert(total_units > already_settled, errors::VOUCHER_ALREADY_USED);
+            self.settled_units.write(channel_id, total_units);
 
             // Escrow was already sent to us by the pool before this call —
             // read it from our own balance rather than trust a calldata
@@ -132,7 +146,7 @@ pub mod MeteringAnonymizer {
                 .unwrap();
             assert(escrow_amount.is_non_zero(), errors::ZERO_ESCROW);
 
-            let settlement: u128 = total_units * rate; // panics on overflow
+            let settlement: u128 = (total_units - already_settled) * rate; // panics on overflow
             assert(settlement <= escrow_amount, errors::SETTLEMENT_EXCEEDS_ESCROW);
 
             let pool = get_caller_address();
