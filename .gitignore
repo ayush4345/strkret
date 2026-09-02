@@ -6,3 +6,4 @@ dist/
 # Cairo/Scarb build artifacts (contracts/)
 target/
 .snfoundry_cache/
+test-mainnet-register.ts

@@ -1,6 +1,9 @@
 import { Account, RpcProvider, constants } from "starknet";
 import { createPrivateTransfers } from "@starkware-libs/starknet-privacy-sdk";
 import type { CallAndProof, PrivateTransfersInterface } from "@starkware-libs/starknet-privacy-sdk";
+import { StarkscanProverProvider } from "./starkscan-prover.js";
+
+export { StarkscanProverProvider } from "./starkscan-prover.js";
 
 export interface PrivacyClientConfig {
   rpcUrl: string;
@@ -10,6 +13,14 @@ export interface PrivacyClientConfig {
   poolAddress: string;
   provingServiceUrl: string;
   indexerUrl: string;
+  /**
+   * When set, uses Starkscan's STRK20 prover relay
+   * (https://starkscan.co/docs/api/strk20-prover) instead of the SDK's
+   * default JSON-RPC proving client. `provingServiceUrl` is then read as
+   * the relay's base URL (e.g. https://api.starkscan.co/v1/SN_MAIN),
+   * not a JSON-RPC prover URL. Mainnet only — there is no Sepolia relay.
+   */
+  starkscanProverApiKey?: string;
 }
 
 export interface PrivacyClient {
@@ -74,10 +85,14 @@ export async function createPrivacyClient(config: PrivacyClientConfig): Promise<
     cairoVersion: "1",
   });
 
+  const provingProvider = config.starkscanProverApiKey
+    ? new StarkscanProverProvider(config.provingServiceUrl, config.starkscanProverApiKey, chainId, provider, config.poolAddress)
+    : { url: config.provingServiceUrl, chainId };
+
   const transfers = createPrivateTransfers({
     account,
     viewingKeyProvider: { getViewingKey: async () => config.viewingKey },
-    provingProvider: { url: config.provingServiceUrl, chainId },
+    provingProvider,
     discoveryProvider: { url: config.indexerUrl },
     poolContractAddress: config.poolAddress,
   });
