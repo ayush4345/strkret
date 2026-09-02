@@ -1,7 +1,11 @@
 /**
  * The anonymizer-contract settlement path (see demo-invoke-devnet.ts),
- * verified end-to-end against real Sepolia infra and the deployed
- * contract at 0x01d50cb0d1fa94d5912b62b42d64e7ff3d49f517f7b137f3a05daf7641cc9c4f.
+ * verified end-to-end against real Sepolia infra. Points at the current
+ * deployment, which carries the per-channel high-water mark
+ * (`settled_units`); the pre-high-water-mark deployment this was first
+ * verified against was 0x01d50cb0d1fa94d5912b62b42d64e7ff3d49f517f7b137f3a05daf7641cc9c4f.
+ * For the incremental/delta behaviour that mark exists for, see
+ * demo-incremental-sepolia.ts.
  *
  * We expected this to need an open-note screening exemption from the pool
  * operator first (see contracts/metering-anonymizer/README.md's earlier
@@ -18,7 +22,7 @@ import { Open } from "@starkware-libs/starknet-privacy-sdk";
 import { createPrivacyClient } from "@strkret/privacy-client";
 import { env } from "./env.js";
 
-const ANONYMIZER_ADDRESS = "0x01d50cb0d1fa94d5912b62b42d64e7ff3d49f517f7b137f3a05daf7641cc9c4f";
+const ANONYMIZER_ADDRESS = "0x06623cb10adc1ddd5511e6e19ee466943f7d7ce18d1703ca1a3b809a61cbd7a4";
 
 async function waitBlocks(client: Awaited<ReturnType<typeof createPrivacyClient>>, blocks: number): Promise<void> {
   const target = (await client.provider.getBlockNumber()) + blocks;
