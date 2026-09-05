@@ -4,11 +4,64 @@
 privately on Starknet via [STRK20](https://strk20.starknet.io).
 
 A consumer agent buys metered calls from a provider agent — priced and served
-independently by the provider — and at the end of a session pays for exactly
-what it used in a single **private transfer** through the STRK20 privacy
-pool. The amount, the sender, and the recipient never appear on-chain: only
-the pool's shielded notes do. Confidentiality is the pool's job; this project
-is the metering and settlement logic sitting on top of it.
+independently by the provider — and pays for exactly what it used through the
+STRK20 privacy pool. The amount, the sender, and the recipient never appear
+on-chain: only the pool's shielded notes do. Confidentiality is the pool's
+job; this project is the metering and settlement logic sitting on top of it.
+
+## The problem: pay-per-use and confidentiality pull against each other
+
+Confidential settlement is not free. Every settlement is an `apply_actions`
+call on the pool, and the pool charges a flat protocol fee for it —
+**6 STRK on mainnet**, read straight off the deployed contract:
+
+```
+starknet_call → get_fee_amount() → 0x53444835ec580000 = 6 × 10^18
+```
+
+Flat, per call, regardless of how much value moves. Pay-per-use wants the
+opposite: many small payments, one per API call. Put those together naively
+and every API call costs 6 STRK to settle, which no per-call price can
+absorb. **Shielded micropayments, done the obvious way, do not exist as a
+product.**
+
+So the question worth engineering is not "how do we pay privately per call",
+it's:
+
+> How do you keep per-call metering granularity while paying settlement cost
+> only once?
+
+## How Strkret answers it
+
+By decoupling **metering** from **settlement**:
+
+- **Metering is per-call, off-chain, and free.** After each call the consumer
+  signs a voucher for its running cumulative total, and the provider keeps
+  the highest one. Signing and verifying cost nothing and touch no chain, so
+  the provider holds an enforceable claim for everything it has served — it
+  is never serving on trust and hoping for a voucher at the end.
+- **Settlement is batched, on-chain, and confidential.** One settlement
+  covers a whole session, or fires when accrued value crosses a threshold.
+  Because vouchers carry a cumulative total and the contract tracks a
+  per-channel high-water mark, settling twice pays the delta, never the total
+  twice.
+
+The anonymizer contract is what makes that decoupling safe rather than merely
+cheap: it verifies the consumer's signature and the rate commitment on-chain,
+so the provider cannot inflate usage and the consumer cannot repudiate it.
+Per-call accountability, per-session settlement cost.
+
+The batching idea itself is old — payment channels and rollups amortise the
+same way. What is specific here is the combination: **metering correctness
+verified inside a shielded settlement**, so batching doesn't require trusting
+either party.
+
+The economics, stated plainly rather than hidden: at 6 STRK per settlement,
+keeping the fee under 5% overhead needs ≥120 STRK moving per settlement, and
+under 1% needs ≥600 STRK. The provider advertises a `minSettlementUnits` in
+its terms for exactly this reason — below it, settling costs more than the
+work is worth, and the consumer should know that before it starts spending
+rather than discover it at settlement.
 
 ## Why a private transfer, not a private *proof*
 
@@ -32,61 +85,65 @@ the plain `transfer()` above, not a replacement: it verifies the consumer's
 signed usage voucher and the `rate_commitment` on-chain, computes
 `settlement = total_units × rate` itself, and splits the escrowed deposit
 into `settlement -> provider` and `refund -> consumer` in one atomic call —
-restoring the on-chain-enforced correctness the original circuit-based
-design had, which a bare `transfer()` doesn't give you.
+so the settlement amount is enforced on-chain rather than trusted, which a
+bare `transfer()` doesn't give you.
 
 The real tradeoff, worth stating precisely: `privacy_invoke`'s output lands
 in a public-amount "open note" — structural, not a workaround. So this path
-makes the **settlement amount** public to get that enforcement (matching
-the original Stellar design's privacy level on amount), while still hiding
-consumer/provider **identity** better than that original design did (it
-published depositor/provider addresses as public signals; open notes hide
-the owner). Plain `transfer()` above still hides the settlement amount too
-and is the better choice when correctness-enforcement isn't worth that.
+trades a **public settlement amount** for on-chain-enforced correctness,
+while still hiding both parties' **identity**, since an open note hides its
+owner. Plain `transfer()` hides the amount too, and is the better choice
+whenever that enforcement isn't worth making the amount public.
 
-We didn't need a shadow account for the provider-gets-`owed`,
-depositor-keeps-the-remainder split, either way — `surplusTo(...)` (plain
-`transfer()` path) and the two-`OpenNoteDeposit` return (anonymizer path)
-both give that for free from primitives that already exist for other
-reasons.
+Neither path needs a shadow account for the provider-gets-`owed`,
+consumer-keeps-the-remainder split: `surplusTo(...)` on the `transfer()`
+path and the two-`OpenNoteDeposit` return on the anonymizer path each give
+that for free from primitives that exist for other reasons.
 
 ## How it fits together
 
 ```mermaid
 sequenceDiagram
     participant C as Consumer process
-    participant P as Provider process (HTTP :4021)
+    participant P as Provider process (HTTP)
     participant Pool as STRK20 Privacy Pool
     participant Anon as Metering Anonymizer (optional)
 
     Note over P,Pool: on-chain, once ever
     P->>Pool: register() — publish viewing key
 
-    Note over C,P: off-chain metering — real HTTP, two separate OS processes
-    C->>P: GET /terms
-    P-->>C: { rate }
-    loop N calls
-        C->>P: POST /call { prompt }
-        P-->>C: { completion, cost }
-    end
-    Note over C: owed = Σ cost
+    Note over C,P: channel open — x402-shaped, no chain contact
+    C->>P: POST /call (no voucher)
+    P-->>C: 402 Payment Required + accepts{rate, channelId,<br/>rateCommitment, minSettlementUnits}
 
-    Note over C,Pool: on-chain settlement
-    C->>Pool: approve + deposit(escrowAmount)
+    Note over C,P: metering — per call, off-chain, free
+    loop N calls
+        C->>C: sign voucher(channelId, cumulative units)
+        C->>P: POST /call + X-STRK20-VOUCHER
+        P->>P: verify sig, require claim grew by ≥ price
+        P-->>C: { completion, cost, claimedUnits }
+    end
+    Note over P: holds an enforceable claim for everything served
+
+    Note over C,Pool: settlement — batched, on-chain, confidential
+    C->>Pool: approve + deposit(escrow)
     Note over C,Pool: wait 10 blocks — note maturity
 
-    alt plain transfer — default, full privacy
-        C->>Pool: transfer(owed)
+    alt plain transfer — amount hidden too
+        C->>Pool: transfer(owed since last settlement)
         Pool-->>P: encrypted note credited
-        Note over C,P,Pool: amount, sender, recipient all hidden — only a nullifier appears
-    else anonymizer contract — on-chain enforced correctness
-        C->>Pool: withdraw(escrowAmount) → Anon
-        Pool->>Anon: privacy_invoke(voucher, signature, rate_commitment)
+        Note over C,P,Pool: amount, sender, recipient all hidden
+    else anonymizer — correctness enforced on-chain
+        C->>Pool: withdraw(escrow) → Anon
+        Pool->>Anon: privacy_invoke(voucher, sig, rateCommitment)
+        Anon->>Anon: check sig + commitment,<br/>pay (units − settled) × rate
         Anon-->>Pool: OpenNoteDeposit × 2
-        Pool-->>P: settlement (amount now public)
-        Pool-->>C: refund (amount now public)
-        Note over Anon,Pool: identity still hidden — only the amount is public
+        Pool-->>P: settlement (amount public)
+        Pool-->>C: refund (amount public)
+        Note over Anon,Pool: identities still hidden; mark advances
     end
+
+    Note over C,Pool: repeat settlement per threshold or at close —<br/>each costs the flat 6 STRK fee, so batch it
 ```
 
 A pnpm workspace, TypeScript project references throughout:
@@ -99,14 +156,25 @@ A pnpm workspace, TypeScript project references throughout:
   `tip: 0n`, wait for inclusion).
 - **`packages/agent-core`** (`@strkret/agent-core`) — the priced
   `Service<Req, Res>` interface, `MeteredSession` (accumulates what's owed,
-  off-chain, no signatures or vouchers needed since STRK20's own transfer
-  confidentiality covers that), and `runSession`: the actual register →
-  approve → deposit → meter → wait-for-maturity → settle flow, generic over
-  whatever `Service` and `PrivacyClient`s it's given.
+  off-chain), `voucher.ts` (signing and verification of cumulative usage
+  vouchers, plus the `accepts` payment-requirements shape the 402 carries),
+  and `runSession`: the register → approve → deposit → meter →
+  wait-for-maturity → settle flow, generic over whatever `Service` and
+  `PrivacyClient`s it's given. Pass `settlementThreshold` to settle
+  mid-session once enough value has accrued instead of only at close.
+
+  The voucher's signed message is `poseidon(channel_id, total_units)` —
+  byte-identical to what the Cairo contract verifies. A mismatch there
+  wouldn't fail at the HTTP boundary; it would fail on-chain at settlement,
+  after the work was already served.
 - **`agents/provider`** (`@strkret/agent-provider`) — owns the concrete
   `EchoService`, the deterministic demo service, and `server.ts`: runs the
-  provider as its own HTTP process (`GET /terms`, `POST /call`). The
-  provider prices independently and never trusts a consumer-claimed cost.
+  provider as its own HTTP process with the payment gate in front of it. An
+  unpaid `POST /call` gets `402` and the terms; a paid one must carry a
+  voucher whose claim has grown by at least this call's price. The provider
+  prices independently and never trusts a consumer-claimed cost.
+  `pnpm --filter @strkret/agent-provider run selfcheck` asserts the gate
+  refuses unpaid, forged, stale, cross-key and wrong-channel vouchers.
 - **`agents/consumer`** (`@strkret/agent-consumer`) — `demo.ts` runs
   `runSession` against real infra (RPC, Sepolia or mainnet, a real prover +
   indexer) from the repo-root `.env`, and writes `strk20.json`.
@@ -216,9 +284,14 @@ pnpm --filter @strkret/agent-consumer run demo
       on-chain payment isn't viable; metering stays off-chain, settlement
       batches.
 - [x] Two separate OS processes talking over real HTTP for the off-chain
-      metering loop (`demo-networked-devnet.ts`) — not the x402 protocol
-      specifically (no `402`/`X-PAYMENT` handshake), but genuinely two
-      processes, not two classes in one
+      metering loop (`demo-networked-devnet.ts`), with an x402-shaped
+      handshake: an unpaid call gets `402` + `accepts`, and every paid call
+      carries a signed cumulative voucher. Deliberately not x402 proper —
+      no per-request `X-PAYMENT` payload, because per-request on-chain
+      payment is the thing the 6 STRK fee rules out
+- [x] Threshold-triggered settlement (`settlementThreshold` on
+      `runSession`) — settles mid-session once enough value accrues, so the
+      flat fee is amortised by design rather than by luck
 - [x] Mainnet prover — Starkscan's STRK20 prover relay, via the adapter in
       `packages/privacy-client/src/starkscan-prover.ts` (their API is
       pilot-phase: 10 proofs/day per key, and `deploy_account` isn't
