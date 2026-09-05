@@ -2,9 +2,15 @@
  * Same flow as demo-devnet.ts, except the provider is a genuinely separate
  * OS process (agent-provider's `serve` script, spawned here so this stays
  * a single command) talking to the consumer over real HTTP — not an
- * in-process EchoService call. The on-chain side (devnet, register,
- * deposit, settle) is identical; only how the consumer discovers the rate
- * and serves calls changes, via RemoteEchoService.
+ * in-process EchoService call. The consumer opens a channel through the
+ * provider's 402 handshake, then carries a running signed voucher on every
+ * call, so the provider holds an enforceable claim for everything it serves
+ * without touching the chain.
+ *
+ * Also exercises threshold-triggered settlement: with three calls at rate
+ * 10 and a threshold of 20, this settles mid-session and again at close —
+ * two settlements rather than one, which is what batching looks like when
+ * a session outgrows a single settlement's worth of value.
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { dirname, resolve } from "node:path";
@@ -18,6 +24,14 @@ import { RemoteEchoService } from "./remote-echo-service.js";
 const PROVIDER_PORT = 4021;
 const PROVIDER_URL = `http://localhost:${PROVIDER_PORT}`;
 const providerDir = resolve(dirname(fileURLToPath(import.meta.url)), "../../provider");
+
+// The key the consumer signs usage vouchers with. Same test vector the
+// Cairo suite and demo-invoke-devnet.ts use (private_key = 0x1) so the
+// signatures here are checkable against those. In a real deployment this is
+// the consumer's own key, and the provider pins the pubkey it agreed the
+// channel with — otherwise anyone can sign a valid voucher with their own
+// key and be served for free.
+const CONSUMER_VOUCHER_KEY = "0x1";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -56,10 +70,14 @@ async function main() {
     const consumerClient = wrapPrivacyClient(testEnv.env.alice, testEnv.env.node, testEnv.transfers.alice);
     const providerClient = wrapPrivacyClient(testEnv.env.bob, testEnv.env.node, testEnv.transfers.bob);
 
-    // Consumer discovers the provider's advertised rate over HTTP — it
-    // never sees or trusts anything about pricing except this response.
-    const service = await RemoteEchoService.connect(PROVIDER_URL);
-    console.log(`consumer discovered rate=${service.price()} from ${PROVIDER_URL}/terms`);
+    // Consumer opens a channel by provoking the provider's 402 and reading
+    // the terms out of it — it never sees or trusts anything about pricing
+    // except that response.
+    const service = await RemoteEchoService.open(PROVIDER_URL, CONSUMER_VOUCHER_KEY);
+    console.log(
+      `consumer opened channel ${service.terms.channelId} via 402: rate=${service.price()}, ` +
+        `minSettlementUnits=${service.minSettlementUnits}`,
+    );
 
     const requests: EchoRequest[] = [{ prompt: "weather" }, { prompt: "translate" }, { prompt: "price" }];
 
@@ -68,6 +86,9 @@ async function main() {
       poolAddress: testEnv.env.privacy.address,
       depositAmount: 1_000n,
       maturityPollMs: 500,
+      // 3 calls x rate 10 = 30 owed, so this settles once mid-session and
+      // once at close — enough to show batching actually branching.
+      settlementThreshold: 20n,
       onWaitTick: async () => {
         await fetch(devnet.url, {
           method: "POST",
@@ -77,7 +98,11 @@ async function main() {
       },
     });
 
-    console.log(`\nnetworked devnet run OK — ${result.calls} calls served over real HTTP, ${result.owed} settled, tx hashes:`);
+    console.log(
+      `\nnetworked devnet run OK — ${result.calls} calls served over real HTTP, ` +
+        `${result.owed} settled across ${result.settlements} settlement(s), ` +
+        `final signed claim ${service.authorizedUnits} units. tx hashes:`,
+    );
     for (const hash of result.txHashes) console.log(`  ${hash}`);
   } finally {
     provider.kill();
