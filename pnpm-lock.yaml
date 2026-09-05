@@ -48,6 +48,9 @@ importers:
       '@strkret/agent-core':
         specifier: workspace:*
         version: link:../../packages/agent-core
+      starknet:
+        specifier: 10.5.0
+        version: 10.5.0(typescript@5.9.3)(zod@3.25.76)
     devDependencies:
       '@types/node':
         specifier: ^22.10.0
@@ -64,6 +67,9 @@ importers:
       '@strkret/privacy-client':
         specifier: workspace:*
         version: link:../privacy-client
+      starknet:
+        specifier: 10.5.0
+        version: 10.5.0(typescript@5.9.3)(zod@3.25.76)
     devDependencies:
       '@types/node':
         specifier: ^22.10.0
