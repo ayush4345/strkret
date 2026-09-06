@@ -1,6 +1,6 @@
 import { ec } from "starknet";
 import type { Service } from "@strkret/agent-core";
-import { signVoucher, voucherToWire, type PaymentRequired, type PaymentRequirements } from "@strkret/agent-core";
+import { priceOf, signVoucher, voucherToWire, type PaymentRequired, type PaymentRequirements } from "@strkret/agent-core";
 import type { EchoRequest, EchoResult } from "@strkret/agent-provider";
 
 /**
@@ -33,11 +33,13 @@ export class RemoteEchoService implements Service<EchoRequest, EchoResult> {
   #authorizedUnits = 0n;
 
   /**
-   * Calls this consumer has actually asked for. The ceiling on what it can
-   * ever owe is `#callsAttempted * price`, and that ceiling is computed here
-   * rather than taken from the provider — which is the whole point of it.
+   * The most this consumer could legitimately owe: the sum of the prices of
+   * the calls it actually asked for. Computed here rather than taken from the
+   * provider — which is the whole point of it. A running sum rather than
+   * calls × rate, because price depends on the request once the service
+   * charges by size.
    */
-  #callsAttempted = 0n;
+  #ceiling = 0n;
 
   private constructor(
     private readonly baseUrl: string,
@@ -67,8 +69,12 @@ export class RemoteEchoService implements Service<EchoRequest, EchoResult> {
     return new RemoteEchoService(baseUrl, consumerPrivateKey, terms);
   }
 
-  price(): bigint {
-    return BigInt(this.terms.rate);
+  /**
+   * Priced through the shared rule, from the terms the provider advertised —
+   * so the number signed here is the number the gate will check against.
+   */
+  price(req: EchoRequest): bigint {
+    return priceOf(this.terms, req.prompt);
   }
 
   /** The running claim the provider currently holds against this consumer. */
@@ -85,7 +91,7 @@ export class RemoteEchoService implements Service<EchoRequest, EchoResult> {
   }
 
   async handle(req: EchoRequest): Promise<EchoResult> {
-    this.#callsAttempted += 1n;
+    this.#ceiling += this.price(req);
     try {
       return await this.#attempt(req);
     } catch (err) {
@@ -103,14 +109,13 @@ export class RemoteEchoService implements Service<EchoRequest, EchoResult> {
       // check exists to stop. We know how many calls we asked for, so that
       // is the ceiling, and it is computed here rather than accepted from
       // over there.
-      const ceiling = this.#callsAttempted * this.price();
-      if (err.requiredUnits > ceiling) {
+      if (err.requiredUnits > this.#ceiling) {
         throw new Error(
-          `provider claims ${err.requiredUnits} units owed but only ${this.#callsAttempted} calls were made ` +
-            `(at most ${ceiling}) — refusing to authorize the difference`,
+          `provider claims ${err.requiredUnits} units owed, above the ${this.#ceiling} ` +
+            `this consumer's own requests could account for — refusing to authorize the difference`,
         );
       }
-      this.#authorizedUnits = err.requiredUnits - this.price();
+      this.#authorizedUnits = err.requiredUnits - this.price(req);
       return await this.#attempt(req);
     }
   }
@@ -119,7 +124,7 @@ export class RemoteEchoService implements Service<EchoRequest, EchoResult> {
     // Authorize this call before it is served, then sign the new cumulative
     // total. The provider rejects anything that has not grown by at least
     // its price, so the claim and the work stay in step.
-    const next = this.#authorizedUnits + this.price();
+    const next = this.#authorizedUnits + this.price(req);
     const voucher = signVoucher(BigInt(this.terms.channelId), next, this.consumerPrivateKey);
 
     const res = await fetch(`${this.baseUrl}/call`, {

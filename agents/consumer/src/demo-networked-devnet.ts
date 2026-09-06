@@ -75,7 +75,8 @@ async function main() {
     // except that response.
     const service = await RemoteEchoService.open(PROVIDER_URL, CONSUMER_VOUCHER_KEY);
     console.log(
-      `consumer opened channel ${service.terms.channelId} via 402: rate=${service.price()}, ` +
+      `consumer opened channel ${service.terms.channelId} via 402: base rate ${service.terms.rate}` +
+        `${service.terms.pricing ? ` (${service.terms.pricing.unitsPerBlock}/${service.terms.pricing.charsPerBlock} chars)` : ""}, ` +
         `minSettlementUnits=${service.minSettlementUnits}`,
     );
 

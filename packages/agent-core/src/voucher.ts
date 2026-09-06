@@ -113,7 +113,16 @@ export interface PaymentRequirements {
   payTo: string;
   resource: string;
   description: string;
+  /** The minimum a request can cost. Not the whole story once price varies. */
   rate: string;
+  /**
+   * How price is computed, when it depends on the request. Machine-readable
+   * on purpose: the consumer signs a voucher for an amount it works out
+   * itself, so both sides have to derive the same number from the same rule.
+   * A prose description would leave them free to disagree, and they would
+   * only find out at the gate. Omitted means a flat `rate` per call.
+   */
+  pricing?: { unitsPerBlock: string; charsPerBlock: number };
   rateCommitment: string;
   channelId: string;
   settlementContract: string;
@@ -124,6 +133,17 @@ export interface PaymentRequirements {
    */
   minSettlementUnits: string;
   maxTimeoutSeconds: number;
+}
+
+/**
+ * The one place the pricing rule is implemented. Both the provider's gate and
+ * the consumer's voucher go through this, so they cannot drift apart — a
+ * disagreement here is a refused call at best and an unpayable claim at worst.
+ */
+export function priceOf(terms: Pick<PaymentRequirements, "rate" | "pricing">, prompt: string): bigint {
+  if (!terms.pricing) return BigInt(terms.rate);
+  const blocks = BigInt(Math.max(1, Math.ceil(prompt.length / terms.pricing.charsPerBlock)));
+  return blocks * BigInt(terms.pricing.unitsPerBlock);
 }
 
 export interface PaymentRequired {

@@ -25,10 +25,31 @@ import {
   type Voucher,
   type VoucherWire,
 } from "@strkret/agent-core";
+import type { PaymentRequirements, Service } from "@strkret/agent-core";
 import { EchoService, type EchoRequest } from "./echo-service.js";
+import { LlmService } from "./llm-service.js";
 
 const PORT = Number(process.env.PORT ?? 4021);
-const service = new EchoService(10n);
+
+/**
+ * Sell real inference when a key is configured, and fall back to the
+ * deterministic echo service when one isn't.
+ *
+ * The fallback is not a courtesy — the devnet demos and both selfchecks have
+ * to run offline and reproducibly, and a provider that needs a paid API key to
+ * start would make `demo:networked-devnet` unrunnable for anyone cloning this.
+ * The metering, voucher and settlement paths are identical either way; only
+ * what is being sold changes.
+ */
+const service: Service<{ prompt: string }, { completion: string; cost: bigint }> =
+  process.env.OPENAI_API_KEY ? new LlmService(10n) : new EchoService(10n);
+
+/**
+ * The minimum a request can cost. Advertised as `rate` because a per-request
+ * price is not a single number once pricing depends on the request — the
+ * formula goes in `pricing`, and the consumer computes its own price from it.
+ */
+const BASE_RATE = service.price({ prompt: "" });
 
 /** Header the consumer carries its running signed claim in. */
 export const VOUCHER_HEADER = "x-strk20-voucher";
@@ -90,8 +111,9 @@ function paymentRequired(): PaymentRequired {
         payTo: PAY_TO,
         resource: "/call",
         description: `${service.name} service, metered per call`,
-        rate: service.price().toString(),
-        rateCommitment: hash.computePoseidonHashOnElements([service.price(), RATE_BLIND]),
+        rate: BASE_RATE.toString(),
+        pricing: (service as { pricing?: PaymentRequirements["pricing"] }).pricing,
+        rateCommitment: hash.computePoseidonHashOnElements([BASE_RATE, RATE_BLIND]),
         channelId: CHANNEL_ID.toString(),
         settlementContract: SETTLEMENT_CONTRACT,
         minSettlementUnits: MIN_SETTLEMENT_UNITS.toString(),
@@ -128,6 +150,11 @@ const server = createServer((req, res) => {
     req.on("data", (chunk) => (body += chunk));
     req.on("end", async () => {
       try {
+        // Parse before pricing: what a request costs depends on what it asks
+        // for, so the claim can't be checked until the body is known.
+        const request = JSON.parse(body) as EchoRequest;
+        const price = service.price(request);
+
         const voucher = readVoucher(req.headers[VOUCHER_HEADER]);
         if (!voucher) {
           json(res, 402, paymentRequired());
@@ -152,7 +179,6 @@ const server = createServer((req, res) => {
         // authorized. Comparing against the stored high-water mark rather
         // than the voucher alone is what stops a replayed older voucher
         // buying another call.
-        const price = service.price();
         const previous = claims.get(claimKey(voucher)) ?? 0n;
         if (voucher.totalUnits < previous + price) {
           // `requiredUnits` is the recovery path, not decoration: if a served
@@ -167,7 +193,8 @@ const server = createServer((req, res) => {
           return;
         }
 
-        const request = JSON.parse(body) as EchoRequest;
+        // price() is what the voucher was signed against, so the gate above
+        // has already accepted this request's cost.
         const result = await service.handle(request);
         claims.set(claimKey(voucher), voucher.totalUnits);
 
@@ -195,7 +222,7 @@ const server = createServer((req, res) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`provider serving on :${PORT} (rate=${service.price()} per call, channel=${CHANNEL_ID})`);
+  console.log(`provider serving on :${PORT} — ${service.name}, ${BASE_RATE}+ units/call, channel=${CHANNEL_ID}`);
   console.log(
     ALLOWED.size > 0
       ? `payment gate pinned to ${ALLOWED.size} consumer key(s)`

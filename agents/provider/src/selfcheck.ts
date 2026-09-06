@@ -9,7 +9,8 @@ import { spawn } from "node:child_process";
 import assert from "node:assert/strict";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { signVoucher, starkKeyOf, voucherToWire, type Voucher } from "@strkret/agent-core";
+import { priceOf, signVoucher, starkKeyOf, voucherToWire, type Voucher } from "@strkret/agent-core";
+import { LlmService } from "./llm-service.js";
 
 const PORT = 4099;
 const URL = `http://localhost:${PORT}`;
@@ -111,7 +112,24 @@ async function main() {
       "pinned gate must serve the pinned consumer",
     );
 
-    console.log("selfcheck OK — gate refuses unpaid, forged, stale, wrong-channel and non-party vouchers, and names the recovery point");
+    // Variable pricing only works if both sides derive the same number from
+    // the advertised terms. Checked directly, because a mismatch shows up as a
+    // refused call rather than as anything obviously price-related.
+    const terms = (await (await fetch(`${URL}/terms`)).json()) as {
+      rate: string;
+      pricing?: { unitsPerBlock: string; charsPerBlock: number };
+    };
+    const svc = new LlmService(10n, 100);
+    for (const prompt of ["", "x", "y".repeat(100), "z".repeat(101), "w".repeat(999)]) {
+      assert.equal(
+        svc.price({ prompt }),
+        priceOf({ rate: svc.pricing.unitsPerBlock, pricing: svc.pricing }, prompt),
+        `provider and consumer must price a ${prompt.length}-char prompt identically`,
+      );
+    }
+    assert.ok(BigInt(terms.rate) > 0n, "402 must advertise a base rate");
+
+    console.log("selfcheck OK — gate refuses unpaid, forged, stale, wrong-channel and non-party vouchers, and names the recovery point, and prices agree across both sides");
   } finally {
     server.kill();
     pinned.kill();
