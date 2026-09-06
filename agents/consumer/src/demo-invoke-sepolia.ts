@@ -17,9 +17,10 @@
  * evidently didn't block it here — worth understanding precisely before
  * relying on it (see the contract README), but not worth blocking on.
  */
-import { ec, hash } from "starknet";
+import { hash } from "starknet";
 import { Open } from "@starkware-libs/starknet-privacy-sdk";
 import { createPrivacyClient } from "@strkret/privacy-client";
+import { signVoucher, starkKeyOf } from "@strkret/agent-core";
 import { env } from "./env.js";
 
 const ANONYMIZER_ADDRESS = "0x0507f521cfe282d8992caf6047eaee614690ea707eee28e8b6018145ce4cd1e6";
@@ -60,10 +61,10 @@ async function main() {
 
   // Sign with the consumer's real account key — this is the real flow, not
   // the 0x1 test vector demo-invoke-devnet.ts / the Cairo tests use.
-  const consumerPubkey = ec.starkCurve.getStarkKey(env.consumer.privateKey);
+  // Sign through the shared helper so the message stays identical to what
+  // the contract verifies — recomputing the hash here is how those drift.
+  const voucher = signVoucher(channelId, totalUnits, env.consumer.privateKey);
   const rateCommitment = hash.computePoseidonHashOnElements([rate, rateBlind]);
-  const messageHash = hash.computePoseidonHashOnElements([channelId, totalUnits]);
-  const sig = ec.starkCurve.sign(messageHash, env.consumer.privateKey);
 
   // Fresh escrow deposit. Approve for the deposit AND the invoke — each is
   // its own apply_actions call, each charged the pool's ~2 STRK protocol
@@ -121,9 +122,9 @@ async function main() {
           rateCommitment,
           channelId,
           totalUnits,
-          consumerPubkey,
-          "0x" + sig.r.toString(16),
-          "0x" + sig.s.toString(16),
+          starkKeyOf(voucher.pubkey),
+          voucher.sigR,
+          voucher.sigS,
           providerNote.noteId,
           refundNote.noteId,
         ],

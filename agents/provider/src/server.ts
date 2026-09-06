@@ -18,6 +18,7 @@
 import { createServer, type ServerResponse } from "node:http";
 import { hash } from "starknet";
 import {
+  starkKeyOf,
   verifyVoucher,
   voucherFromWire,
   type PaymentRequired,
@@ -57,7 +58,7 @@ const MIN_SETTLEMENT_UNITS = BigInt(process.env.MIN_SETTLEMENT_UNITS ?? 600);
  * still valid and still settles for the full delta.
  */
 const claims = new Map<string, bigint>();
-const claimKey = (v: Voucher): string => `${v.starkKey}:${v.channelId}`;
+const claimKey = (v: Voucher): string => `${starkKeyOf(v.pubkey)}:${v.channelId}`;
 
 function paymentRequired(): PaymentRequired {
   return {

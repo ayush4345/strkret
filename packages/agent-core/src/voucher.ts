@@ -24,15 +24,6 @@ export interface Voucher {
    * lose an afternoon.
    */
   pubkey: string;
-  /**
-   * The x-coordinate alone. This is the form Cairo's `check_ecdsa_signature`
-   * takes, so it is what goes into `privacy_invoke`'s calldata and what the
-   * contract keys its high-water mark on. Carried alongside `pubkey` rather
-   * than sliced out of it at the call site, because the two are easy to
-   * confuse and the failure mode is a settlement that reverts as
-   * BAD_SIGNATURE after the work has already been served.
-   */
-  starkKey: string;
   sigR: string;
   sigS: string;
 }
@@ -48,13 +39,23 @@ export function voucherMessageHash(channelId: bigint, totalUnits: bigint): strin
   return hash.computePoseidonHashOnElements([channelId, totalUnits]);
 }
 
+/**
+ * The x-coordinate of an uncompressed key, which is the form Cairo's
+ * `check_ecdsa_signature` takes — so this is what goes into
+ * `privacy_invoke`'s calldata and what the contract keys its high-water mark
+ * on. Derived rather than carried on the voucher: one source of truth means
+ * there is no mismatched pair to detect.
+ */
+export function starkKeyOf(pubkey: string): string {
+  return "0x" + pubkey.replace(/^0x04/, "").slice(0, 64).replace(/^0+/, "");
+}
+
 export function signVoucher(channelId: bigint, totalUnits: bigint, privateKey: string): Voucher {
   const sig = ec.starkCurve.sign(voucherMessageHash(channelId, totalUnits), privateKey);
   return {
     channelId,
     totalUnits,
     pubkey: "0x" + Buffer.from(ec.starkCurve.getPublicKey(privateKey)).toString("hex"),
-    starkKey: ec.starkCurve.getStarkKey(privateKey),
     sigR: "0x" + sig.r.toString(16),
     sigS: "0x" + sig.s.toString(16),
   };
@@ -72,13 +73,6 @@ export function signVoucher(channelId: bigint, totalUnits: bigint, privateKey: s
  */
 export function verifyVoucher(voucher: Voucher): boolean {
   try {
-    // Cross-check the two key forms agree before trusting either: the
-    // signature is verified against `pubkey`, but `starkKey` is what a
-    // settlement will actually be charged against, so a voucher carrying a
-    // mismatched pair must not pass here.
-    const x = BigInt("0x" + voucher.pubkey.replace(/^0x04/, "").slice(0, 64));
-    if (x !== BigInt(voucher.starkKey)) return false;
-
     return ec.starkCurve.verify(
       new ec.starkCurve.Signature(BigInt(voucher.sigR), BigInt(voucher.sigS)),
       voucherMessageHash(voucher.channelId, voucher.totalUnits),
@@ -92,35 +86,17 @@ export function verifyVoucher(voucher: Voucher): boolean {
 }
 
 /** Wire form — bigints don't survive JSON, so they travel as strings. */
-export interface VoucherWire {
+export type VoucherWire = Omit<Voucher, "channelId" | "totalUnits"> & {
   channelId: string;
   totalUnits: string;
-  pubkey: string;
-  starkKey: string;
-  sigR: string;
-  sigS: string;
-}
+};
 
 export function voucherToWire(v: Voucher): VoucherWire {
-  return {
-    channelId: v.channelId.toString(),
-    totalUnits: v.totalUnits.toString(),
-    pubkey: v.pubkey,
-    starkKey: v.starkKey,
-    sigR: v.sigR,
-    sigS: v.sigS,
-  };
+  return { ...v, channelId: String(v.channelId), totalUnits: String(v.totalUnits) };
 }
 
 export function voucherFromWire(w: VoucherWire): Voucher {
-  return {
-    channelId: BigInt(w.channelId),
-    totalUnits: BigInt(w.totalUnits),
-    pubkey: w.pubkey,
-    starkKey: w.starkKey,
-    sigR: w.sigR,
-    sigS: w.sigS,
-  };
+  return { ...w, channelId: BigInt(w.channelId), totalUnits: BigInt(w.totalUnits) };
 }
 
 /**

@@ -12,14 +12,9 @@ import { ContractDiscoveryProvider } from "@starkware-libs/starknet-privacy-sdk/
 import { createPoolContract } from "@strkret/privacy-client";
 import { env } from "./env.js";
 
-type Balances = Map<string, bigint>;
-
-function summarize(notes: Map<bigint, { amount: bigint }[]> | any): Balances {
-  const out: Balances = new Map();
-  for (const [token, list] of notes.entries()) {
-    out.set("0x" + BigInt(token).toString(16), (list as { amount: bigint }[]).reduce((s, n) => s + n.amount, 0n));
-  }
-  return out;
+/** Total the account holds in the escrow token, per whichever path found it. */
+function total(notes: any): bigint {
+  return (notes.get(BigInt(env.tokenAddress)) ?? []).reduce((s: bigint, n: { amount: bigint }) => s + n.amount, 0n);
 }
 
 async function main() {
@@ -39,25 +34,18 @@ async function main() {
 
   console.log("discovering via the hosted indexer...");
   const viaIndexer = createPrivateTransfers({ ...shared, discoveryProvider: { url: env.indexerUrl } } as any);
-  const a = summarize((await viaIndexer.discoverNotes()).notes);
+  const a = total((await viaIndexer.discoverNotes()).notes);
 
   console.log("discovering via pool contract calls (no indexer)...");
   const viaContract = createPrivateTransfers({
     ...shared,
     discoveryProvider: new ContractDiscoveryProvider(createPoolContract(env.poolAddress, provider)),
   } as any);
-  const b = summarize((await viaContract.discoverNotes()).notes);
+  const b = total((await viaContract.discoverNotes()).notes);
 
-  const tokens = new Set([...a.keys(), ...b.keys()]);
-  let mismatch = false;
-  for (const t of tokens) {
-    const x = a.get(t) ?? 0n;
-    const y = b.get(t) ?? 0n;
-    console.log(`  ${t}: indexer=${x} contract=${y} ${x === y ? "match" : "MISMATCH"}`);
-    if (x !== y) mismatch = true;
-  }
-  if (tokens.size === 0) console.log("  (no notes on either side — inconclusive, fund the account first)");
-  if (mismatch) throw new Error("contract discovery disagreed with the hosted indexer");
+  console.log(`  ${env.tokenAddress}: indexer=${a} contract=${b} ${a === b ? "match" : "MISMATCH"}`);
+  if (a !== b) throw new Error("contract discovery disagreed with the hosted indexer");
+  if (a === 0n) throw new Error("both sides found nothing — inconclusive, fund the account first");
   console.log("\nOK — contract discovery agrees with the hosted indexer.");
 }
 

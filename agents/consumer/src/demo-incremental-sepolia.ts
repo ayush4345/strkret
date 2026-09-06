@@ -14,9 +14,10 @@
  * everything it receives in the same call — the escrow is consumed per
  * settlement, only the high-water mark persists between them.
  */
-import { ec, hash } from "starknet";
+import { hash } from "starknet";
 import { Open } from "@starkware-libs/starknet-privacy-sdk";
 import { createPrivacyClient } from "@strkret/privacy-client";
+import { signVoucher, starkKeyOf } from "@strkret/agent-core";
 import { env } from "./env.js";
 
 const ANONYMIZER_ADDRESS = "0x0507f521cfe282d8992caf6047eaee614690ea707eee28e8b6018145ce4cd1e6";
@@ -52,10 +53,10 @@ async function settleRound(
   totalUnits: bigint,
   expectedDelta: bigint,
 ): Promise<string> {
-  const consumerPubkey = ec.starkCurve.getStarkKey(env.consumer.privateKey);
+  // Sign through the shared helper so the message stays identical to what
+  // the contract verifies — recomputing the hash here is how those drift.
+  const voucher = signVoucher(CHANNEL_ID, totalUnits, env.consumer.privateKey);
   const rateCommitment = hash.computePoseidonHashOnElements([RATE, RATE_BLIND]);
-  const messageHash = hash.computePoseidonHashOnElements([CHANNEL_ID, totalUnits]);
-  const sig = ec.starkCurve.sign(messageHash, env.consumer.privateKey);
 
   const approveTx = await consumer.account.execute(
     {
@@ -102,9 +103,9 @@ async function settleRound(
           rateCommitment,
           CHANNEL_ID,
           totalUnits,
-          consumerPubkey,
-          "0x" + sig.r.toString(16),
-          "0x" + sig.s.toString(16),
+          starkKeyOf(voucher.pubkey),
+          voucher.sigR,
+          voucher.sigS,
           providerNote.noteId,
           refundNote.noteId,
         ],

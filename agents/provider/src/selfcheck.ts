@@ -56,12 +56,9 @@ async function main() {
     const forged = { ...signVoucher(CHANNEL, 10n, CONSUMER_KEY), totalUnits: 9999n };
     assert.equal((await call(forged)).status, 402, "tampered voucher must be refused");
 
-    // Mismatched key pair: valid signature, but starkKey doesn't match pubkey.
-    const swapped = {
-      ...signVoucher(CHANNEL, 10n, CONSUMER_KEY),
-      starkKey: signVoucher(CHANNEL, 10n, ATTACKER_KEY).starkKey,
-    };
-    assert.equal((await call(swapped)).status, 402, "mismatched key forms must be refused");
+    // Signature from one key presented under another key: must not verify.
+    const swapped = { ...signVoucher(CHANNEL, 10n, ATTACKER_KEY), pubkey: signVoucher(CHANNEL, 10n, CONSUMER_KEY).pubkey };
+    assert.equal((await call(swapped)).status, 402, "signature under a foreign pubkey must be refused");
 
     // Wrong channel.
     assert.equal((await call(signVoucher(999n, 10n, CONSUMER_KEY))).status, 402, "unknown channel must be refused");
