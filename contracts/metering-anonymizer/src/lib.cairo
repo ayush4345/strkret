@@ -1,6 +1,7 @@
 use privacy::objects::OpenNoteDeposit;
 use starknet::ContractAddress;
 
+pub mod malicious_erc20;
 pub mod mock_erc20;
 
 /// DRAFT — unreviewed. Verifies a consumer-signed usage voucher and splits
@@ -76,6 +77,7 @@ pub mod errors {
     pub const BAD_SIGNATURE: felt252 = 'BAD_SIGNATURE';
     pub const VOUCHER_ALREADY_USED: felt252 = 'VOUCHER_ALREADY_USED';
     pub const SETTLEMENT_EXCEEDS_ESCROW: felt252 = 'SETTLEMENT_EXCEEDS_ESCROW';
+    pub const ESCROW_TOO_LARGE: felt252 = 'ESCROW_TOO_LARGE';
 }
 
 #[starknet::contract]
@@ -85,13 +87,21 @@ pub mod MeteringAnonymizer {
     use core::num::traits::Zero;
     use core::poseidon::poseidon_hash_span;
     use openzeppelin::interfaces::token::erc20::{IERC20Dispatcher, IERC20DispatcherTrait};
+    use openzeppelin::security::reentrancyguard::ReentrancyGuardComponent;
     use privacy::objects::OpenNoteDeposit;
     use starknet::storage::{Map, StorageMapReadAccess, StorageMapWriteAccess};
     use starknet::{ContractAddress, get_caller_address, get_contract_address};
     use super::{IMeteringAnonymizer, ProviderClaim, errors};
 
+    component!(
+        path: ReentrancyGuardComponent, storage: reentrancy_guard, event: ReentrancyGuardEvent,
+    );
+    impl ReentrancyGuardInternal = ReentrancyGuardComponent::InternalImpl<ContractState>;
+
     #[storage]
     struct Storage {
+        #[substorage(v0)]
+        reentrancy_guard: ReentrancyGuardComponent::Storage,
         /// Per-channel high-water mark: the highest `total_units` already
         /// settled on that channel, keyed by
         /// `poseidon(consumer_pubkey, channel_id)` so that channels are
@@ -111,6 +121,13 @@ pub mod MeteringAnonymizer {
         settled_units: Map<felt252, u128>,
     }
 
+    #[event]
+    #[derive(Drop, starknet::Event)]
+    enum Event {
+        #[flat]
+        ReentrancyGuardEvent: ReentrancyGuardComponent::Event,
+    }
+
     #[constructor]
     fn constructor(ref self: ContractState) {}
 
@@ -122,6 +139,15 @@ pub mod MeteringAnonymizer {
             claims: Span<ProviderClaim>,
             refund_note_id: felt252,
         ) -> Span<OpenNoteDeposit> {
+            // `token` is caller-supplied and this function makes external
+            // calls to it (`balance_of`, `approve`) *before* the high-water
+            // marks are written. Without a guard, a malicious token can
+            // reenter from `balance_of` while every mark still reads zero and
+            // replay the same vouchers — each nested call passing the
+            // strictly-newer check because the outer one has not recorded
+            // anything yet.
+            self.reentrancy_guard.start();
+
             assert(token.is_non_zero(), errors::ZERO_TOKEN);
             assert(claims.len().is_non_zero(), errors::NO_CLAIMS);
 
@@ -131,10 +157,12 @@ pub mod MeteringAnonymizer {
             // instead of external-call output since there's no external
             // call here).
             let token_dispatcher = IERC20Dispatcher { contract_address: token };
-            let escrow_amount: u128 = token_dispatcher
-                .balance_of(get_contract_address())
-                .try_into()
-                .unwrap();
+            // A bare `unwrap()` here panics with no indication of why. Above
+            // u128::MAX is not a reachable balance for any real token, but a
+            // named error beats an unexplained failure in a settlement path.
+            let escrow_u256 = token_dispatcher.balance_of(get_contract_address());
+            let escrow_maybe: Option<u128> = escrow_u256.try_into();
+            let escrow_amount: u128 = escrow_maybe.expect(errors::ESCROW_TOO_LARGE);
             assert(escrow_amount.is_non_zero(), errors::ZERO_ESCROW);
 
             let mut deposits: Array<OpenNoteDeposit> = ArrayTrait::new();
@@ -223,6 +251,8 @@ pub mod MeteringAnonymizer {
             if refund.is_non_zero() {
                 deposits.append(OpenNoteDeposit { note_id: refund_note_id, token, amount: refund });
             }
+
+            self.reentrancy_guard.end();
             deposits.span()
         }
     }

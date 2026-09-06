@@ -1,3 +1,4 @@
+use metering_anonymizer::malicious_erc20::{IReenterDispatcher, IReenterDispatcherTrait};
 use metering_anonymizer::{
     IMeteringAnonymizerDispatcher, IMeteringAnonymizerDispatcherTrait, ProviderClaim,
 };
@@ -372,4 +373,31 @@ fn rejects_a_voucher_settled_at_a_different_rate() {
                 .span(),
             REFUND_NOTE_ID,
         );
+}
+
+/// `token` is caller-supplied and `balance_of` is called on it before any
+/// high-water mark is written, so a malicious token can reenter while every
+/// mark still reads zero. Without the guard the nested call replays the very
+/// vouchers the outer call is settling — each passing the strictly-newer
+/// check because nothing has been recorded yet.
+#[should_panic(expected: 'ReentrancyGuard: reentrant call')]
+#[test]
+fn rejects_reentrancy_from_a_malicious_token() {
+    let anonymizer = deploy_anonymizer();
+    let evil = declare("MaliciousErc20").unwrap().contract_class();
+    let (evil_address, _) = evil.deploy(@array![]).unwrap();
+
+    // Arm it to call privacy_invoke(token=itself, [one claim], refund) —
+    // the same shape the outer call is about to make.
+    let mut inner: Array<felt252> = array![];
+    evil_address.serialize(ref inner);
+    let claims = array![consumer_claim(TOTAL_UNITS, SIG_R, SIG_S)];
+    claims.span().serialize(ref inner);
+    REFUND_NOTE_ID.serialize(ref inner);
+    IReenterDispatcher { contract_address: evil_address }
+        .set_target(anonymizer, inner);
+
+    start_cheat_caller_address(anonymizer, 0x999.try_into().unwrap());
+    IMeteringAnonymizerDispatcher { contract_address: anonymizer }
+        .privacy_invoke(evil_address, claims.span(), REFUND_NOTE_ID);
 }

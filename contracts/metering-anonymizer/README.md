@@ -1,6 +1,6 @@
 # metering-anonymizer
 
-**DRAFT — unreviewed. Do not deploy to mainnet without a security review.**
+**DRAFT.** Reviewed in-repo (see Review status below); not independently audited.
 
 A STRK20 anonymizer (`privacy_invoke`) contract that verifies a
 consumer-signed usage voucher on-chain and splits an escrowed deposit into
@@ -97,16 +97,45 @@ that consumer.
 
 ## Security review needed before any deploy
 
-- **Settled findings, kept for the record.** The signature originally covered
-  only `(channel_id, total_units)`, leaving the rate unbound and the
-  settlement amount at the discretion of whoever assembled the transaction;
-  the commitment is now part of the signed message. Still open and worth a
-  reviewer's attention: `token` is caller-supplied and receives external
-  calls (`balance_of`, `approve`), so an arbitrary address is a fake-balance
-  and reentrancy surface; escrow is read as the contract's entire balance, so
-  stray tokens are swept into the next settlement's refund; the pool's
-  allowance is never reset; and the `u256 -> u128` balance conversion panics
-  above `u128::MAX`.
+## Review status
+
+**Fixed.**
+
+- *The settlement amount was not enforced.* The signature covered only
+  `(channel_id, total_units)`, so the rate was unbound and whoever assembled
+  the transaction chose the payout — a 100-unit voucher agreed at rate 5
+  could be settled at rate 1. The commitment is now inside the signed
+  message. `rejects_a_voucher_settled_at_a_different_rate` covers it.
+- *Reentrancy through the caller-supplied token.* `token` comes from
+  calldata and `balance_of` is called on it **before** any high-water mark is
+  written, so a malicious token could reenter while every mark still read
+  zero and replay the vouchers the outer call was settling. Guarded with
+  OpenZeppelin's `ReentrancyGuardComponent`.
+  `rejects_reentrancy_from_a_malicious_token` deploys a token that actually
+  reenters, and fails when the guard is removed — it discriminates rather
+  than passing vacuously.
+- *Unexplained panic on the balance conversion.* `u256 -> u128` used a bare
+  `unwrap()`; it now fails as `ESCROW_TOO_LARGE`. Not reachable for a real
+  token, but a named error beats a silent one in a settlement path.
+
+**Accepted, with reasons.**
+
+- *Escrow is the contract's entire balance of `token`.* Anyone can send
+  tokens here and they are swept into the next settlement's refund note.
+  Measuring the balance is deliberate — the alternative is trusting a
+  calldata argument for the escrow amount, which is worse. The contract is
+  drained every call, so this is an accounting oddity for a donor rather
+  than a loss for a settling party.
+- *The pool's allowance is not reset.* Each call approves exactly
+  `escrow_amount` and the pool pulls it within the same transaction, so a
+  residue only exists if the pool under-pulls. Resetting afterwards is
+  impossible — the pull happens after this function returns.
+
+**Still worth an independent look.** A caller can still name a token the
+contract does not actually hold escrow in; the deposits then reference that
+token while the real escrow stays behind. That harms only the caller who
+built such a transaction, but it does break the "never holds funds across
+transactions" property this contract otherwise maintains.
 - **The signature check is the highest-risk part.** A bug here lets anyone
   who can see a voucher (which the provider legitimately does, as part of
   normal metering) forge a settlement claim. Independently verify
@@ -129,7 +158,7 @@ that consumer.
 
 ## Testing
 
-`snforge test` — 13 tests, including a happy-path case using a real
+`snforge test` — 14 tests, including a happy-path case using a real
 STARK-curve signature generated with starknet.js (the same library the
 production TS client uses) for `private_key = 0x1`, verified correctly by
 the on-chain `check_ecdsa_signature` call. That's evidence the signing and

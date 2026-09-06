@@ -351,7 +351,7 @@ something the next one assumes.
 
 ```bash
 pnpm -r build
-(cd contracts/metering-anonymizer && snforge test)   # 13 tests
+(cd contracts/metering-anonymizer && snforge test)   # 14 tests
 pnpm --filter @strkret/agent-provider run selfcheck  # gate refuses bad vouchers
 pnpm --filter @strkret/agent-consumer run selfcheck  # consumer refuses to over-sign
 ```
@@ -433,9 +433,11 @@ that is the replay guard doing its job.
       consumer agreed to. Previously the commitment was merely passed in
       calldata beside the rate, which made that check circular and let
       whoever assembled the transaction choose the payout
-- [x] Anonymizer contract (`contracts/metering-anonymizer`) — draft, 13/13
-      tests pass, verified on devnet and Sepolia; still needs a security
-      review before mainnet (see that package's README)
+- [x] Anonymizer contract (`contracts/metering-anonymizer`) — 14/14 tests,
+      verified on devnet and Sepolia. Security review done: the unenforced
+      settlement amount and a reentrancy path through the caller-supplied
+      token are fixed, two findings are accepted with reasons, and one is
+      flagged for an independent look (see that package's README)
 - [x] Incremental vouchers with a per-channel high-water mark, so a
       provider holds a running off-chain claim and settlement pays only the
       delta — verified on Sepolia (`demo-incremental-sepolia.ts`). The pool
