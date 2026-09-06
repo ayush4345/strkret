@@ -19,6 +19,13 @@ import type { EchoRequest, EchoResult } from "@strkret/agent-provider";
  * off-chain, so the provider holds an enforceable claim for everything it
  * has served while the chain stays untouched until settlement.
  */
+/** The provider's claim is ahead of ours — it tells us where to catch up to. */
+class VoucherBehindError extends Error {
+  constructor(readonly requiredUnits: bigint) {
+    super(`voucher behind; provider requires ${requiredUnits} units`);
+  }
+}
+
 export class RemoteEchoService implements Service<EchoRequest, EchoResult> {
   readonly name = "echo";
 
@@ -71,6 +78,20 @@ export class RemoteEchoService implements Service<EchoRequest, EchoResult> {
   }
 
   async handle(req: EchoRequest): Promise<EchoResult> {
+    try {
+      return await this.#attempt(req);
+    } catch (err) {
+      // A served call whose response was lost leaves the provider's claim
+      // ahead of ours, and every later voucher is then too low — the channel
+      // wedges. The 402 says what it needs, so adopt that and try once more.
+      // Once only: a second refusal is a real disagreement, not a lost reply.
+      if (!(err instanceof VoucherBehindError)) throw err;
+      this.#authorizedUnits = err.requiredUnits - this.price();
+      return await this.#attempt(req);
+    }
+  }
+
+  async #attempt(req: EchoRequest): Promise<EchoResult> {
     // Authorize this call before it is served, then sign the new cumulative
     // total. The provider rejects anything that has not grown by at least
     // its price, so the claim and the work stay in step.
@@ -86,7 +107,8 @@ export class RemoteEchoService implements Service<EchoRequest, EchoResult> {
       body: JSON.stringify(req),
     });
     if (res.status === 402) {
-      const detail = (await res.json()) as { error?: string };
+      const detail = (await res.json()) as { error?: string; requiredUnits?: string };
+      if (detail.requiredUnits) throw new VoucherBehindError(BigInt(detail.requiredUnits));
       throw new Error(`provider refused the voucher: ${detail.error ?? "payment required"}`);
     }
     if (!res.ok) throw new Error(`POST /call failed: ${res.status}`);

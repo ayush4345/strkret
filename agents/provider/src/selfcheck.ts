@@ -9,7 +9,7 @@ import { spawn } from "node:child_process";
 import assert from "node:assert/strict";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { signVoucher, voucherToWire, type Voucher } from "@strkret/agent-core";
+import { signVoucher, starkKeyOf, voucherToWire, type Voucher } from "@strkret/agent-core";
 
 const PORT = 4099;
 const URL = `http://localhost:${PORT}`;
@@ -17,8 +17,8 @@ const CHANNEL = 7n;
 const CONSUMER_KEY = "0x1";
 const ATTACKER_KEY = "0x2";
 
-const call = (voucher?: Voucher): Promise<Response> =>
-  fetch(`${URL}/call`, {
+const call = (voucher?: Voucher, url = URL): Promise<Response> =>
+  fetch(`${url}/call`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -27,24 +27,41 @@ const call = (voucher?: Voucher): Promise<Response> =>
     body: JSON.stringify({ prompt: "hello" }),
   });
 
-async function main() {
-  const server = spawn("npx", ["tsx", "src/server.ts"], {
-    cwd: resolve(dirname(fileURLToPath(import.meta.url)), ".."),
-    env: { ...process.env, PORT: String(PORT) },
+const dir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+
+function start(port: number, extraEnv: Record<string, string> = {}) {
+  return spawn("npx", ["tsx", "src/server.ts"], {
+    cwd: dir,
+    env: { ...process.env, PORT: String(port), ...extraEnv },
     stdio: ["ignore", "ignore", "inherit"],
+  });
+}
+
+async function waitUp(url: string) {
+  const deadline = Date.now() + 15_000;
+  for (;;) {
+    try {
+      if ((await fetch(`${url}/terms`)).ok) return;
+    } catch {
+      /* not up yet */
+    }
+    if (Date.now() > deadline) throw new Error(`server did not start at ${url}`);
+    await new Promise((r) => setTimeout(r, 200));
+  }
+}
+
+async function main() {
+  const server = start(PORT);
+  // A second provider with the gate pinned to one consumer key.
+  const PINNED_PORT = PORT + 1;
+  const pinnedUrl = `http://localhost:${PINNED_PORT}`;
+  const pinned = start(PINNED_PORT, {
+    ALLOWED_CONSUMER_KEYS: starkKeyOf(signVoucher(CHANNEL, 1n, CONSUMER_KEY).pubkey),
   });
 
   try {
-    const deadline = Date.now() + 15_000;
-    for (;;) {
-      try {
-        if ((await fetch(`${URL}/terms`)).ok) break;
-      } catch {
-        /* not up yet */
-      }
-      if (Date.now() > deadline) throw new Error("server did not start");
-      await new Promise((r) => setTimeout(r, 200));
-    }
+    await waitUp(URL);
+    await waitUp(pinnedUrl);
 
     // No voucher at all -> 402 carrying terms, not a served call.
     const bare = await call();
@@ -66,8 +83,13 @@ async function main() {
     // Honest first call: exactly one call's worth of units.
     assert.equal((await call(signVoucher(CHANNEL, 10n, CONSUMER_KEY))).status, 200, "paid call must be served");
 
-    // Replaying that same voucher buys nothing — the claim hasn't grown.
-    assert.equal((await call(signVoucher(CHANNEL, 10n, CONSUMER_KEY))).status, 402, "replayed voucher must be refused");
+    // Replaying that same voucher buys nothing — the claim hasn't grown, and
+    // the refusal has to say where to catch up to, or a consumer that lost a
+    // response can never resync.
+    const stale = await call(signVoucher(CHANNEL, 10n, CONSUMER_KEY));
+    assert.equal(stale.status, 402, "replayed voucher must be refused");
+    const staleBody = (await stale.json()) as { requiredUnits?: string };
+    assert.equal(staleBody.requiredUnits, "20", "402 must name the units required to recover");
 
     // Growing the claim buys the next call.
     assert.equal((await call(signVoucher(CHANNEL, 20n, CONSUMER_KEY))).status, 200, "grown claim must be served");
@@ -75,9 +97,24 @@ async function main() {
     // A different consumer starts from their own zero, unaffected by the above.
     assert.equal((await call(signVoucher(CHANNEL, 10n, ATTACKER_KEY))).status, 200, "channels must be per-consumer");
 
-    console.log("selfcheck OK — payment gate refuses unpaid, forged, stale and cross-key vouchers");
+    // With the gate pinned, a valid signature from a key that is not a party
+    // to the channel buys nothing — otherwise anyone signs their own voucher
+    // and is served for free.
+    assert.equal(
+      (await call(signVoucher(CHANNEL, 10n, ATTACKER_KEY), pinnedUrl)).status,
+      402,
+      "pinned gate must refuse a non-party signer",
+    );
+    assert.equal(
+      (await call(signVoucher(CHANNEL, 10n, CONSUMER_KEY), pinnedUrl)).status,
+      200,
+      "pinned gate must serve the pinned consumer",
+    );
+
+    console.log("selfcheck OK — gate refuses unpaid, forged, stale, wrong-channel and non-party vouchers, and names the recovery point");
   } finally {
     server.kill();
+    pinned.kill();
   }
 }
 

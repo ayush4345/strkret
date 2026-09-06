@@ -40,6 +40,8 @@ export class StarkscanProverProvider implements ProofProviderInterface {
     private readonly poolAddressHex: string,
     /** How often to re-poll if the relay doesn't say (defensive default). */
     private readonly fallbackPollMs = 5_000,
+    /** Give up on a job that never goes terminal rather than hang forever. */
+    private readonly maxPollMs = 10 * 60_000,
   ) {}
 
   invalidateNonceCache(): void {
@@ -103,8 +105,15 @@ export class StarkscanProverProvider implements ProofProviderInterface {
     }
     let job = (await submitRes.json()) as StarkscanProveJob;
 
+    // A job that never reaches a terminal state would otherwise spin here
+    // forever, and `??` alone would let a relay-supplied 0 become a tight
+    // loop against a rate-limited API.
+    const deadline = Date.now() + this.maxPollMs;
     while (!job.terminal) {
-      const waitMs = (job.pollAfterSeconds ?? this.fallbackPollMs / 1000) * 1000;
+      if (Date.now() > deadline) {
+        throw new Error(`Starkscan prover job ${job.jobId} still "${job.status}" after ${this.maxPollMs}ms`);
+      }
+      const waitMs = Math.max(1_000, (job.pollAfterSeconds || this.fallbackPollMs / 1000) * 1000);
       await new Promise((r) => setTimeout(r, waitMs));
       const pollRes = await fetch(`${this.apiUrl}/prove/${job.jobId}`, {
         headers: { "X-Starkscan-Api-Key": this.apiKey },

@@ -16,7 +16,7 @@
  */
 import { hash } from "starknet";
 import { Open } from "@starkware-libs/starknet-privacy-sdk";
-import { createPrivacyClient } from "@strkret/privacy-client";
+import { createPoolContract, createPrivacyClient } from "@strkret/privacy-client";
 import { signVoucher, starkKeyOf } from "@strkret/agent-core";
 import { env } from "./env.js";
 
@@ -38,7 +38,15 @@ const RATE_BLIND = 42n;
 // A channel this account has not settled on before — the mark starts at 0,
 // so round 1's delta is its full total. Bump this to rerun from scratch.
 const CHANNEL_ID = 7n;
-const FEE_BUFFER = 3n * 10n ** 18n;
+/**
+ * What to approve per fee-charged call. Read from the pool rather than
+ * hardcoded — Sepolia charges 2 STRK and mainnet 6, so a constant is only
+ * right on one network, and being short reverts after the gas is spent.
+ */
+async function feeBuffer(client: Client): Promise<bigint> {
+  const fee = BigInt(await createPoolContract(env.poolAddress, client.provider).get_fee_amount());
+  return fee + fee / 2n;
+}
 
 /**
  * One full settlement round: fresh escrow in, one anonymizer invoke out.
@@ -62,7 +70,7 @@ async function settleRound(
     {
       contractAddress: env.tokenAddress,
       entrypoint: "approve",
-      calldata: [env.poolAddress, (ESCROW_AMOUNT + 2n * FEE_BUFFER).toString(), "0"],
+      calldata: [env.poolAddress, (ESCROW_AMOUNT + 2n * (await feeBuffer(consumer))).toString(), "0"],
     },
     { tip: 0n },
   );

@@ -1,4 +1,4 @@
-import type { PrivacyClient } from "@strkret/privacy-client";
+import { createPoolContract, type PrivacyClient } from "@strkret/privacy-client";
 import { MeteredSession } from "./meter.js";
 import type { Service } from "./service.js";
 
@@ -88,12 +88,27 @@ async function registerIfNeeded(label: string, client: PrivacyClient, log: (msg:
 // — true for STRK, which is what this demo uses; a deployment charging fees
 // in a different token than the one being shielded would need a second
 // approval this doesn't do.
-// Read from the deployed pool's get_fee_amount() on the hosted Sepolia
-// testnet env (2026-08-28): 0x1bc16d674ec80000 = 2 STRK. Don't assume this
-// is fixed — a different deployment (mainnet included) can configure a
-// different fee_amount or fee_collector; call get_fee_amount() again rather
-// than trust this constant on a new environment.
-const FEE_APPROVAL_BUFFER = 3n * 10n ** 18n; // 3 STRK — comfortable margin over the observed 2 STRK fee
+/**
+ * What to approve per fee-charged call: the pool's own `get_fee_amount()`
+ * plus half again as headroom.
+ *
+ * This used to be a hardcoded 3 STRK, sized against the 2 STRK Sepolia
+ * charges. Mainnet charges 6, so that constant approved less than half of
+ * what the pool pulls and every mainnet call would have reverted on
+ * allowance — after the gas to get there had already been spent. The pool
+ * publishes the number; read it rather than carry a guess that is only
+ * right on one network.
+ */
+async function feeApprovalPerCall(
+  client: PrivacyClient,
+  poolAddress: string,
+  log: (msg: string) => void,
+): Promise<bigint> {
+  const fee = BigInt(await createPoolContract(poolAddress, client.provider).get_fee_amount());
+  const approval = fee + fee / 2n;
+  log(`[session] pool charges ${fee} per apply_actions; approving ${approval} per call`);
+  return approval;
+}
 
 async function approveAndWait(
   client: PrivacyClient,
@@ -132,8 +147,10 @@ export async function runSession<Req, Res>(
   const txHashes: string[] = [];
   const pollMs = opts.maturityPollMs ?? 15_000;
 
+  const feePerCall = await feeApprovalPerCall(consumer, opts.poolAddress, log);
+
   // Provider has no deposit of its own — approve just the fee buffer.
-  await approveAndWait(provider, opts.tokenAddress, opts.poolAddress, FEE_APPROVAL_BUFFER, pollMs, opts.onWaitTick, log, "provider");
+  await approveAndWait(provider, opts.tokenAddress, opts.poolAddress, feePerCall, pollMs, opts.onWaitTick, log, "provider");
   const providerRegisterTx = await registerIfNeeded("provider", provider, log);
   if (providerRegisterTx) txHashes.push(providerRegisterTx);
 
@@ -152,7 +169,7 @@ export async function runSession<Req, Res>(
     consumer,
     opts.tokenAddress,
     opts.poolAddress,
-    opts.depositAmount + (1n + maxSettlements) * FEE_APPROVAL_BUFFER,
+    opts.depositAmount + (1n + maxSettlements) * feePerCall,
     pollMs,
     opts.onWaitTick,
     log,

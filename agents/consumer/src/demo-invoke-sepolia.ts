@@ -19,7 +19,7 @@
  */
 import { hash } from "starknet";
 import { Open } from "@starkware-libs/starknet-privacy-sdk";
-import { createPrivacyClient } from "@strkret/privacy-client";
+import { createPoolContract, createPrivacyClient } from "@strkret/privacy-client";
 import { signVoucher, starkKeyOf } from "@strkret/agent-core";
 import { env } from "./env.js";
 
@@ -67,15 +67,17 @@ async function main() {
   const rateCommitment = hash.computePoseidonHashOnElements([rate, rateBlind]);
 
   // Fresh escrow deposit. Approve for the deposit AND the invoke — each is
-  // its own apply_actions call, each charged the pool's ~2 STRK protocol
-  // fee independently (see packages/agent-core/src/session.ts's
-  // FEE_APPROVAL_BUFFER comment for how this was first discovered).
-  const FEE_BUFFER = 3n * 10n ** 18n;
+  // its own apply_actions call, each charged the pool's protocol fee
+  // independently. Read the fee from the pool rather than hardcoding it —
+  // Sepolia charges 2 STRK and mainnet 6, so a constant is only ever right
+  // on one of them.
+  const poolFee = BigInt(await createPoolContract(env.poolAddress, consumer.provider).get_fee_amount());
+  const feeBuffer = poolFee + poolFee / 2n;
   const approveTx = await consumer.account.execute(
     {
       contractAddress: env.tokenAddress,
       entrypoint: "approve",
-      calldata: [env.poolAddress, (escrowAmount + 2n * FEE_BUFFER).toString(), "0"],
+      calldata: [env.poolAddress, (escrowAmount + 2n * feeBuffer).toString(), "0"],
     },
     { tip: 0n },
   );

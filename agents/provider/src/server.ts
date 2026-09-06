@@ -51,6 +51,25 @@ const NETWORK = process.env.STARKNET_NETWORK ?? "starknet-sepolia";
 const MIN_SETTLEMENT_UNITS = BigInt(process.env.MIN_SETTLEMENT_UNITS ?? 600);
 
 /**
+ * Stark keys allowed to spend on this channel, comma-separated.
+ *
+ * Verifying a signature only proves whoever holds *some* key authorized the
+ * claim — it says nothing about that key being the consumer this channel was
+ * opened with. Without pinning, anyone signs with their own key, gets their
+ * own high-water mark, and is served indefinitely for free.
+ *
+ * Left unset the gate stays open, which is fine for a local demo and not
+ * fine anywhere else, so it says so loudly at startup.
+ */
+const ALLOWED = new Set(
+  (process.env.ALLOWED_CONSUMER_KEYS ?? "")
+    .split(",")
+    .map((k) => k.trim())
+    .filter(Boolean)
+    .map((k) => BigInt(k).toString()),
+);
+
+/**
  * Highest cumulative units seen per (pubkey, channel), mirroring the
  * contract's own high-water mark. In-memory on purpose: this is a claim
  * cache, and the authoritative mark lives on-chain in `settled_units`. A
@@ -122,6 +141,11 @@ const server = createServer((req, res) => {
           json(res, 402, { error: `unknown channel ${voucher.channelId}`, ...paymentRequired() });
           return;
         }
+        const signer = BigInt(starkKeyOf(voucher.pubkey)).toString();
+        if (ALLOWED.size > 0 && !ALLOWED.has(signer)) {
+          json(res, 402, { error: "signer is not a party to this channel", ...paymentRequired() });
+          return;
+        }
 
         // The claim has to have grown by at least what this call costs,
         // otherwise the consumer is asking to be served for units it has not
@@ -131,8 +155,13 @@ const server = createServer((req, res) => {
         const price = service.price();
         const previous = claims.get(claimKey(voucher)) ?? 0n;
         if (voucher.totalUnits < previous + price) {
+          // `requiredUnits` is the recovery path, not decoration: if a served
+          // response is lost in flight the provider's mark has advanced and
+          // the consumer's has not, and without being told the number it
+          // would re-send the same too-low claim forever.
           json(res, 402, {
             error: `voucher must cover at least ${previous + price} units, got ${voucher.totalUnits}`,
+            requiredUnits: (previous + price).toString(),
             ...paymentRequired(),
           });
           return;
@@ -167,4 +196,9 @@ const server = createServer((req, res) => {
 
 server.listen(PORT, () => {
   console.log(`provider serving on :${PORT} (rate=${service.price()} per call, channel=${CHANNEL_ID})`);
+  console.log(
+    ALLOWED.size > 0
+      ? `payment gate pinned to ${ALLOWED.size} consumer key(s)`
+      : "WARNING: ALLOWED_CONSUMER_KEYS unset — any valid signature is served. Demo only.",
+  );
 });
