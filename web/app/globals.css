@@ -29,23 +29,6 @@
   --gut: clamp(1.25rem, 4vw, 3rem);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --paper:      oklch(0.185 0.022 264);
-    --paper-2:    oklch(0.225 0.026 264);
-    --brand:       oklch(0.700 0.150 264);
-    --brand-press: oklch(0.780 0.140 264);
-    --meter:       oklch(0.740 0.140 55);
-    --on-paper:      oklch(0.950 0.010 264);
-    --on-paper-mute: oklch(0.720 0.022 264);
-    --rule:      oklch(0.320 0.026 264);
-    --rule-firm: oklch(0.420 0.030 264);
-    --control:   oklch(0.480 0.028 264);
-    --ok:        oklch(0.740 0.140 155);
-    --bad:       oklch(0.700 0.150 25);
-  }
-}
-
 *, *::before, *::after { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
 body {

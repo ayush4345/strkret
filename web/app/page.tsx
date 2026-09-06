@@ -74,9 +74,12 @@ export default function Page() {
   const terms = state?.terms ?? {};
   const owed = BigInt(state?.owed ?? "0");
   const settled = BigInt(state?.settled ?? "0");
-  const threshold = BigInt(state?.threshold ?? "0");
   const unsettled = owed - settled;
-  const pct = threshold > 0n ? Number((unsettled * 100n) / threshold) : 0;
+  // Calls covered by the next settlement. This is the amortisation factor —
+  // one flat fee divided across however many calls you waited for — and it is
+  // the number the whole design turns on.
+  const lastSettleAt = state?.settlements.length ? state.settlements[state.settlements.length - 1].at : 0;
+  const callsSinceSettle = (state?.calls ?? []).filter((c) => c.at > lastSettleAt).length;
 
   // Interleaved, newest first: a settlement fires mid-session, so the log has
   // to show it where it actually happened rather than in a separate list.
@@ -122,14 +125,22 @@ export default function Page() {
           <div className="tape__k">settled on-chain</div>
           <div className="tape__v tape__v--brand">{settled.toString()}</div>
           <div className="tape__s">
-            {state?.settlements.length ?? 0} settlement{(state?.settlements.length ?? 0) === 1 ? "" : "s"} ·
-            one flat fee each
+            {state?.settlements.length ?? 0} settlement{(state?.settlements.length ?? 0) === 1 ? "" : "s"} · one flat fee each
           </div>
         </div>
         <div className="tape__cell">
-          <div className="tape__k">toward next settlement</div>
-          <div className="tape__v">{unsettled.toString()}<span style={{ fontSize: ".5em", color: "var(--on-paper-mute)" }}> / {threshold.toString()}</span></div>
-          <div className="tape__bar"><i style={{ width: `${Math.min(100, pct)}%` }} /></div>
+          <div className="tape__k">next settlement covers</div>
+          <div className="tape__v">
+            {callsSinceSettle}
+            <span style={{ fontSize: ".45em", color: "var(--on-paper-mute)" }}>
+              {callsSinceSettle === 1 ? " call" : " calls"}
+            </span>
+          </div>
+          <div className="tape__s">
+            {callsSinceSettle === 0
+              ? "nothing outstanding"
+              : `one flat fee across ${callsSinceSettle} — wait longer, pay less per call`}
+          </div>
         </div>
       </section>
 
@@ -166,8 +177,9 @@ export default function Page() {
             </button>
           </form>
           <p className="ask__hint">
-            Every call signs a fresh voucher for the running total. Settlement fires on its own once{" "}
-            {threshold.toString()} units are owed — or press Settle now.
+            Every call signs a fresh voucher for the running total, off-chain and free. Settling is
+            a decision — each one pays the pool&rsquo;s flat fee whatever its size, so the longer
+            you wait, the less that fee costs per call.
           </p>
           {error && <p className="err">{error}</p>}
 

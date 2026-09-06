@@ -31,7 +31,16 @@ cranks blocks instead. Nothing here is simulated; only the chain is local.
 - The **402** panel: terms the provider advertised, including the rate
   commitment every voucher is signed over.
 - **Owed vs settled**: owed climbs on every call with no chain contact;
-  settled only moves when a settlement fires.
+  settled only moves when you press Settle now.
+- **"Next settlement covers N calls"**: the amortisation factor. One flat fee
+  divided across however many calls you waited for — the number the whole
+  design turns on.
 - The **settlement entry**: one private transfer, amount and both parties
   hidden, for several calls at once. That is the whole argument — the pool
   charges a flat fee per settlement, so the batch is the only lever.
+
+Settlement is manual on purpose. An auto-settle threshold would pay a full
+protocol fee every few calls, which is exactly the behaviour this project
+argues against — a demo that settles on a timer contradicts its own case.
+`runSession` still supports a threshold for unattended runs; set
+`SETTLE_THRESHOLD` to re-enable it here.

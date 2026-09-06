@@ -31,16 +31,19 @@ const providerDir = resolve(dirname(fileURLToPath(import.meta.url)), "../../prov
 const CONSUMER_VOUCHER_KEY = "0x1";
 const DEPOSIT = 100_000n;
 /**
- * Settle once this much is owed. Deliberately small — at 10 units a call, a
- * larger threshold means a presenter has to ask thirty questions before
- * anything settles, and the batching is the thing worth showing.
+ * Auto-settle threshold. Zero means never — settlement is a decision the
+ * operator makes, via POST /settle.
  *
- * The provider is started with a matching `MIN_SETTLEMENT_UNITS` below, so
- * the terms it advertises and the point we actually settle at agree. On
- * mainnet that number comes from the 6 STRK fee; here it is scaled to a
- * demo.
+ * It is off by design. Each settlement pays the pool's flat protocol fee
+ * whatever its size, so settling every few calls is precisely the behaviour
+ * this project argues against: at a 3-call threshold you pay one full fee per
+ * three calls and the batching buys nothing. Waiting is the whole point, and
+ * a demo that settles on a timer contradicts its own case.
+ *
+ * `runSession` still supports a threshold for unattended runs, where nobody
+ * is there to decide. Set SETTLE_THRESHOLD to re-enable it here.
  */
-const THRESHOLD = 30n;
+const THRESHOLD = BigInt(process.env.SETTLE_THRESHOLD ?? 0);
 
 type Phase = "booting" | "ready" | "settling" | "failed";
 
@@ -134,7 +137,9 @@ async function boot(): Promise<void> {
       ...process.env,
       PORT: String(PROVIDER_PORT),
       TOKEN_ADDRESS: strk,
-      MIN_SETTLEMENT_UNITS: THRESHOLD.toString(),
+      // The honest figure: below roughly this much, a settlement costs more
+      // in protocol fee than the work it pays for is worth.
+      MIN_SETTLEMENT_UNITS: process.env.MIN_SETTLEMENT_UNITS ?? "600",
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -264,10 +269,11 @@ const server = createServer((req, res) => {
             at: Date.now(),
           });
 
-          // Threshold settlement, same rule runSession applies: settle once
-          // enough value has accrued that the protocol fee is worth paying.
+          // Only when a threshold is explicitly configured. Off by default:
+          // see THRESHOLD above for why a demo that settles on a timer argues
+          // against itself.
           const unsettled = session!.owed - BigInt(state.settled);
-          const crossed = unsettled >= THRESHOLD;
+          const crossed = THRESHOLD > 0n && unsettled >= THRESHOLD;
           if (crossed) await settle();
 
           json(res, 200, {
