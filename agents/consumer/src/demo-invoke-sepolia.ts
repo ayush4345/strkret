@@ -23,7 +23,7 @@ import { createPoolContract, createPrivacyClient } from "@strkret/privacy-client
 import { claimFromVoucher, encodeInvokeCalldata, signVoucher } from "@strkret/agent-core";
 import { env } from "./env.js";
 
-const ANONYMIZER_ADDRESS = "0x0416e8f8426ad158b0802d62035f81f9a3efb89f11b69be7f48ca790b1ec4d7e";
+const ANONYMIZER_ADDRESS = "0x04ca3501bfbc7c6efb292d26ca39f04d3914e61608ecee9aef84fab33312372b";
 
 async function waitBlocks(client: Awaited<ReturnType<typeof createPrivacyClient>>, blocks: number): Promise<void> {
   const target = (await client.provider.getBlockNumber()) + blocks;

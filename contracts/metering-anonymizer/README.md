@@ -181,13 +181,14 @@ specific prover, not of the contract.
 
 Declared, deployed, and **invoked for real** — see above.
 
-Current deployment (per-channel high-water mark, keyed by
-`poseidon(consumer_pubkey, channel_id)`):
+Current deployment — batched claims, per-channel high-water mark keyed by
+`poseidon(consumer_pubkey, channel_id)`, and the rate commitment bound into
+the signed voucher:
 
-- Class hash: `0x609715e0dc33df0aee12cb09104d803a7bb01cf86b86e44f51a495fbf8ccd05`
-- Contract address: `0x0507f521cfe282d8992caf6047eaee614690ea707eee28e8b6018145ce4cd1e6`
-- Declare tx: `0x4a0537b83b0d0f190af25c0050b102fb7a242edea911ec59c51031de524fdc1`
-- Deploy tx: `0x041a3511c7bc1db6e2e99aba8dd62d0b94a9ebf5af5ba2153f29be533bb61f06`
+- Class hash: `0x4a874051b4e4af6067f3df232eb7174d08b020c0531c28eb1c45fce784b456b`
+- Contract address: `0x04ca3501bfbc7c6efb292d26ca39f04d3914e61608ecee9aef84fab33312372b`
+- Declare tx: `0x5f962ea3ce310e4a1939c7249f3bdda6fab130ee7e7052ffdb4da1579c4f6d4`
+- Deploy tx: `0x03a02cb092d5c544a3d58610f6946f6e2c11effc35bf90b0112ad384d262317a`
 
 **Incremental settlement verified on real Sepolia**
 (`agents/consumer/src/demo-incremental-sepolia.ts`,
@@ -197,10 +198,10 @@ voucher, with the provider's credited amount read back from
 `discoverNotes()` between rounds rather than trusted from the script.
 
 - Round 1, cumulative `100` against a mark of `0` — settle tx
-  `0x23b86f1fcdffb955696f0d8fe484d955c166a1624123025876c0a8895864457`,
+  `0x496611eb368a474f7783ad03ac32246027ce2f5c0e4a0a37c4913ad2be0927f`,
   provider credited `+500`.
 - Round 2, cumulative `150` against a mark of `100` — settle tx
-  `0xb3e53718701defb634aa1454f79ca2ffe4df2400cafc4a23bc1ff6ef06d38f`,
+  `0x6c4d2bfae82d13d86dbd055df067447290a6b13d37fd1e63fc6f85de7f94b7d`,
   provider credited `+250`, the 50-unit delta rather than the cumulative
   `750` a naive reading would pay.
 
