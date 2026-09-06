@@ -304,6 +304,26 @@ exactly like `demo:devnet` — except every metered call is a real
 `POST /call` over `localhost`, not an in-process method call. Two real OS
 processes, real HTTP between them; the script just starts both for you.
 
+## Running it in a browser
+
+A console for driving a live session by hand, for presenting the flow rather
+than reading a script's output. Two processes:
+
+```bash
+pnpm --filter @strkret/agent-consumer run serve   # devnet + provider + channel (~30s)
+pnpm --filter @strkret/web run dev                # http://localhost:3100
+```
+
+Type a question, watch the signed claim climb with no chain contact, then
+settle when you choose. Settlement is manual on purpose: an auto-settle
+threshold pays a full protocol fee every few calls, which is the behaviour
+this design exists to avoid, so a demo that settles on a timer argues against
+itself. `runSession` keeps threshold settlement for unattended runs — that is
+what `demo:networked-devnet` shows — and `SETTLE_THRESHOLD` re-enables it in
+the server.
+
+See [`web/README.md`](web/README.md) for what to point at while presenting.
+
 ## Running it for real (Sepolia or mainnet)
 
 ```bash
