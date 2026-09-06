@@ -415,7 +415,12 @@ that is the replay guard doing its job.
       so a consumer using M provider agents pays them in **one** settlement
       instead of M. At 6 STRK a settlement that is the difference between 6
       and 6M, and the only lever available since the fee itself is flat
-- [x] Anonymizer contract (`contracts/metering-anonymizer`) — draft, 12/12
+- [x] Settlement amount actually enforced — the rate commitment is inside
+      the signed message, so a voucher can only be settled at the rate its
+      consumer agreed to. Previously the commitment was merely passed in
+      calldata beside the rate, which made that check circular and let
+      whoever assembled the transaction choose the payout
+- [x] Anonymizer contract (`contracts/metering-anonymizer`) — draft, 13/13
       tests pass, verified on devnet and Sepolia; still needs a security
       review before mainnet (see that package's README)
 - [x] Incremental vouchers with a per-channel high-water mark, so a

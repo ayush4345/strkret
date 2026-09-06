@@ -111,7 +111,9 @@ async function main() {
     const totalUnits = 100n;
     const rate = 5n;
     const rateBlind = 42n;
-    const voucher = signVoucher(channelId, totalUnits, consumerPrivateKey);
+    // The rate the settlement is pinned to — signed, not merely passed.
+    const rateCommitment = hash.computePoseidonHashOnElements([rate, rateBlind]);
+    const voucher = signVoucher(channelId, totalUnits, rateCommitment, consumerPrivateKey);
     const escrowAmount = 1000n;
     const settlement = rate * totalUnits;
 

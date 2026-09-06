@@ -3,28 +3,31 @@ use metering_anonymizer::{
 };
 use openzeppelin::interfaces::token::erc20::{IERC20Dispatcher, IERC20DispatcherTrait};
 use snforge_std::{ContractClassTrait, DeclareResultTrait, declare, start_cheat_caller_address};
+use core::poseidon::poseidon_hash_span;
 use starknet::ContractAddress;
 
-// Test vector generated with starknet.js (the same library our real client
-// uses to sign) for private_key = 0x1: sign(poseidon(channel_id=1,
-// total_units=100)) and poseidon(rate=5, rate_blind=42). Not a placeholder —
-// this is the actual signature the on-chain check has to accept.
+// Test vectors generated with starknet.js (the same library our real client
+// uses to sign) for private_key = 0x1: sign(poseidon(channel_id, total_units,
+// rate_commitment)) where rate_commitment = poseidon(rate=5, rate_blind=42).
+// Not placeholders — these are the actual signatures the on-chain check has
+// to accept, and the commitment is inside the signed message because that is
+// what pins the settlement to an agreed rate.
 const CONSUMER_PUBKEY: felt252 = 0x1ef15c18599971b7beced415a40f0c7deacfd9b0d1819e03d723d8bc943cfca;
 const CHANNEL_ID: felt252 = 1;
 const TOTAL_UNITS: u128 = 100;
-const SIG_R: felt252 = 0x4a2160061438583b5b5724a348dff7b051fbf30f0d75c355eff59f3c552dbf8;
-const SIG_S: felt252 = 0x4d0621ee782b395424644c4c9bd3699d8768f2a8ecf5a893adf5243eced5c68;
+const SIG_R: felt252 = 0x5c18b457290b1339d9152a7156896fcc471f3aa368e4f50373d83d6b7d7e751;
+const SIG_S: felt252 = 0x2580bf2c846990dee97737d7384f3df85315b9640161d02c06acc26c20e2c4f;
 // A second, strictly newer voucher on the SAME channel — sign(poseidon(
 // channel_id=1, total_units=150)) for the same private_key = 0x1. Same
 // provenance as the vector above, generated with starknet.js.
 const TOTAL_UNITS_2: u128 = 150;
-const SIG_R_2: felt252 = 0x25b656a42c7f6aba56c1b6d7c7fcd94c7c577d467ddafb0366f0d57793838fb;
-const SIG_S_2: felt252 = 0x225881f71ca449d50ea4581edf610a1a6b0aed3f5b06d83d7f8524415c24fa2;
+const SIG_R_2: felt252 = 0x49c0ff094530ab99282215f52d6b3494183437ce7c2afa86c1973c3206d36fb;
+const SIG_S_2: felt252 = 0x5f31872edc94f408a73a8ba036479110f7a6c33f4bebbcccc0e5f14358d86a;
 // A DIFFERENT consumer (private_key = 0x2) signing the SAME channel_id and
 // unit count, for the channel-isolation test below.
 const CONSUMER_2_PUBKEY: felt252 = 0x759ca09377679ecd535a81e83039658bf40959283187c654c5416f439403cf5;
-const CONSUMER_2_SIG_R: felt252 = 0x2344631a1ab32e3255c7caab894fac415c46adaae2c847b714182c78f206bf;
-const CONSUMER_2_SIG_S: felt252 = 0x5d9b9f4f4e7af76c2d447ccb8bec747c2f584f81ddf2463612ab7bb8837e54f;
+const CONSUMER_2_SIG_R: felt252 = 0x404915cdf053166a9e7e60469181e7c9dfcd91a7439fe22d9b0b7b4a2cc27dc;
+const CONSUMER_2_SIG_S: felt252 = 0x177728d5b06dc1ac576a10a3c316d15d8a538f862edf34fb446e06b402736ee;
 const RATE: u128 = 5;
 const RATE_BLIND: felt252 = 42;
 const RATE_COMMITMENT: felt252 = 0x6543d1c88b2dbfa68234938d4b8fb03ade9966495f58a3db6eca8f47583e0a8;
@@ -39,8 +42,8 @@ const REFUND_NOTE_ID: felt252 = 222;
 const C2_CHANNEL: felt252 = 2;
 const C2_UNITS: u128 = 100;
 const C2_PUBKEY: felt252 = 0x759ca09377679ecd535a81e83039658bf40959283187c654c5416f439403cf5;
-const C2_SIG_R: felt252 = 0x332fb9021b5926aa4f83592cd7ba101c6ac767c0f6afb22f607a84919c14e72;
-const C2_SIG_S: felt252 = 0x62fc025b81913eb0a64375df3cbc0d87558ce60daf9785c79a073de34fae029;
+const C2_SIG_R: felt252 = 0x201f69f7ae90a178d0dcaf4c2a72d1022f82b0fe350eb2337a0fca6c8a09f56;
+const C2_SIG_S: felt252 = 0x175fecfac0c1a3dc05135387b2747249e0c3e278d148a4471d272bea2194650;
 
 /// Assemble one claim at the shared rate. Every test builds claims through
 /// this, so a signature and the units it covers cannot drift apart by hand.
@@ -333,4 +336,40 @@ fn rejects_an_empty_batch() {
 
     IMeteringAnonymizerDispatcher { contract_address: anonymizer }
         .privacy_invoke(token, array![].span(), REFUND_NOTE_ID);
+}
+
+/// The reason the commitment is signed rather than merely passed. A voucher
+/// is valid for the units it names *at the rate it was agreed at* — settling
+/// it against a different commitment, even one that opens correctly, must
+/// fail. Without this the settling party picks the payout: a 100-unit voucher
+/// could be settled at rate 1 instead of the agreed 5.
+#[should_panic(expected: 'BAD_SIGNATURE')]
+#[test]
+fn rejects_a_voucher_settled_at_a_different_rate() {
+    let anonymizer = deploy_anonymizer();
+    let token = deploy_mock_erc20(anonymizer, ESCROW_AMOUNT);
+    start_cheat_caller_address(anonymizer, 0x999.try_into().unwrap());
+
+    // rate 1 with a blind that opens its own commitment — internally
+    // consistent, and signed by nobody.
+    let cheap_commitment = poseidon_hash_span([1_u128.into(), RATE_BLIND].span());
+    IMeteringAnonymizerDispatcher { contract_address: anonymizer }
+        .privacy_invoke(
+            token,
+            array![
+                ProviderClaim {
+                    rate: 1_u128,
+                    rate_blind: RATE_BLIND,
+                    rate_commitment: cheap_commitment,
+                    channel_id: CHANNEL_ID,
+                    total_units: TOTAL_UNITS,
+                    consumer_pubkey: CONSUMER_PUBKEY,
+                    sig_r: SIG_R,
+                    sig_s: SIG_S,
+                    provider_note_id: PROVIDER_NOTE_ID,
+                },
+            ]
+                .span(),
+            REFUND_NOTE_ID,
+        );
 }

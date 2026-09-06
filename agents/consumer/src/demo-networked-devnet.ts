@@ -52,28 +52,39 @@ async function waitUntilUp(url: string, timeoutMs = 15_000): Promise<void> {
 }
 
 async function main() {
+  // Devnet first: the provider needs the STRK address it will advertise, and
+  // that only exists once the devnet has deployed it.
+  const devnetEarly = new Devnet();
+  const testEnv = await createDevnetTestEnv(devnetEarly);
+  const strkAddress = testEnv.env.strk;
+
   console.log("spawning provider as its own process...");
+  // The provider is started before the devnet exists, so its STRK address is
+  // injected once known — see below. A devnet deploys its own STRK, so the
+  // default (the canonical mainnet/Sepolia address) would be wrong here, and
+  // the consumer's asset check would correctly reject it.
   const provider: ChildProcess = spawn("npx", ["tsx", "src/server.ts"], {
     cwd: providerDir,
-    env: { ...process.env, PORT: String(PROVIDER_PORT) },
+    env: { ...process.env, PORT: String(PROVIDER_PORT), TOKEN_ADDRESS: strkAddress },
     stdio: ["ignore", "pipe", "pipe"],
   });
   provider.stdout?.on("data", (d) => process.stdout.write(`[provider] ${d}`));
   provider.stderr?.on("data", (d) => process.stderr.write(`[provider] ${d}`));
 
-  const devnet = new Devnet();
+  const devnet = devnetEarly;
   try {
     await waitUntilUp(PROVIDER_URL);
     console.log(`provider process up at ${PROVIDER_URL} (pid ${provider.pid})`);
 
-    const testEnv = await createDevnetTestEnv(devnet);
     const consumerClient = wrapPrivacyClient(testEnv.env.alice, testEnv.env.node, testEnv.transfers.alice);
     const providerClient = wrapPrivacyClient(testEnv.env.bob, testEnv.env.node, testEnv.transfers.bob);
 
     // Consumer opens a channel by provoking the provider's 402 and reading
     // the terms out of it — it never sees or trusts anything about pricing
     // except that response.
-    const service = await RemoteEchoService.open(PROVIDER_URL, CONSUMER_VOUCHER_KEY);
+    // The third argument is the check: the consumer refuses to open a channel
+    // whose advertised settlement asset is not the token it actually pays in.
+    const service = await RemoteEchoService.open(PROVIDER_URL, CONSUMER_VOUCHER_KEY, strkAddress);
     console.log(
       `consumer opened channel ${service.terms.channelId} via 402: base rate ${service.terms.rate}` +
         `${service.terms.pricing ? ` (${service.terms.pricing.unitsPerBlock}/${service.terms.pricing.charsPerBlock} chars)` : ""}, ` +

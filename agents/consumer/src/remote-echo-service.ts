@@ -51,7 +51,18 @@ export class RemoteEchoService implements Service<EchoRequest, EchoResult> {
    * Open a channel by provoking the provider's 402 and reading its terms.
    * Deliberately does not send a voucher: the 402 is the discovery step.
    */
-  static async open(baseUrl: string, consumerPrivateKey: string): Promise<RemoteEchoService> {
+  static async open(
+    baseUrl: string,
+    consumerPrivateKey: string,
+    /**
+     * The token this consumer intends to settle in. Checked against the
+     * provider's advertised asset: a channel opened against one asset and
+     * settled in another pays the provider in something it never agreed to
+     * accept, and nothing on-chain would catch it — the contract credits
+     * whatever token the calldata names.
+     */
+    expectedAsset?: string,
+  ): Promise<RemoteEchoService> {
     const res = await fetch(`${baseUrl}/call`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -65,6 +76,11 @@ export class RemoteEchoService implements Service<EchoRequest, EchoResult> {
     if (!terms) throw new Error("402 carried no payment requirements");
     if (terms.scheme !== "strk20-channel") {
       throw new Error(`unsupported payment scheme ${terms.scheme}`);
+    }
+    if (expectedAsset && BigInt(terms.asset) !== BigInt(expectedAsset)) {
+      throw new Error(
+        `provider settles in ${terms.asset}, but this consumer pays in ${expectedAsset}`,
+      );
     }
     return new RemoteEchoService(baseUrl, consumerPrivateKey, terms);
   }
@@ -125,7 +141,14 @@ export class RemoteEchoService implements Service<EchoRequest, EchoResult> {
     // total. The provider rejects anything that has not grown by at least
     // its price, so the claim and the work stay in step.
     const next = this.#authorizedUnits + this.price(req);
-    const voucher = signVoucher(BigInt(this.terms.channelId), next, this.consumerPrivateKey);
+    // Signed over the provider's published commitment, so the settlement is
+    // pinned to the rate this channel was opened at.
+    const voucher = signVoucher(
+      BigInt(this.terms.channelId),
+      next,
+      this.terms.rateCommitment,
+      this.consumerPrivateKey,
+    );
 
     const res = await fetch(`${this.baseUrl}/call`, {
       method: "POST",

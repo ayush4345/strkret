@@ -14,6 +14,7 @@
  * everything it receives in the same call — the escrow is consumed per
  * settlement, only the high-water mark persists between them.
  */
+import { hash } from "starknet";
 import { Open } from "@starkware-libs/starknet-privacy-sdk";
 import { createPoolContract, createPrivacyClient } from "@strkret/privacy-client";
 import { claimFromVoucher, encodeInvokeCalldata, signVoucher } from "@strkret/agent-core";
@@ -62,7 +63,9 @@ async function settleRound(
 ): Promise<string> {
   // Sign through the shared helper so the message stays identical to what
   // the contract verifies — recomputing the hash here is how those drift.
-  const voucher = signVoucher(CHANNEL_ID, totalUnits, env.consumer.privateKey);
+  // The rate the settlement is pinned to — signed, not merely passed.
+  const rateCommitment = hash.computePoseidonHashOnElements([RATE, RATE_BLIND]);
+  const voucher = signVoucher(CHANNEL_ID, totalUnits, rateCommitment, env.consumer.privateKey);
 
   const approveTx = await consumer.account.execute(
     {

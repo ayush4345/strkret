@@ -51,6 +51,7 @@ const service: Service<{ prompt: string }, { completion: string; cost: bigint }>
  */
 const BASE_RATE = service.price({ prompt: "" });
 
+
 /** Header the consumer carries its running signed claim in. */
 export const VOUCHER_HEADER = "x-strk20-voucher";
 
@@ -61,7 +62,14 @@ export const VOUCHER_HEADER = "x-strk20-voucher";
 const RATE_BLIND = BigInt(process.env.RATE_BLIND ?? 42);
 const CHANNEL_ID = BigInt(process.env.CHANNEL_ID ?? 7);
 const PAY_TO = process.env.PROVIDER_ADDRESS ?? "0x0";
-const ASSET = process.env.TOKEN_ADDRESS ?? "0x0";
+/**
+ * The token settlement happens in. STRK's address is the same on mainnet and
+ * Sepolia, so that is the default; a devnet deploys its own and overrides it.
+ * Advertised in the terms so the consumer can check it is the token it is
+ * actually about to pay in — a channel opened against one asset and settled
+ * in another pays the provider in something it never agreed to accept.
+ */
+const ASSET = process.env.TOKEN_ADDRESS ?? "0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d";
 const SETTLEMENT_CONTRACT = process.env.ANONYMIZER_ADDRESS ?? "0x0";
 const NETWORK = process.env.STARKNET_NETWORK ?? "starknet-sepolia";
 
@@ -70,6 +78,16 @@ const NETWORK = process.env.STARKNET_NETWORK ?? "starknet-sepolia";
 // starts spending rather than discover it when settlement turns out
 // uneconomic.
 const MIN_SETTLEMENT_UNITS = BigInt(process.env.MIN_SETTLEMENT_UNITS ?? 600);
+
+/**
+ * The rate commitment this provider settles against, published in its terms.
+ * Vouchers must be signed over exactly this: a voucher signed over some other
+ * commitment verifies perfectly well and then settles at whatever rate that
+ * commitment opens to, which is how a consumer would underpay.
+ */
+const RATE_COMMITMENT = hash.computePoseidonHashOnElements([BASE_RATE, RATE_BLIND]);
+
+
 
 /**
  * Stark keys allowed to spend on this channel, comma-separated.
@@ -113,7 +131,7 @@ function paymentRequired(): PaymentRequired {
         description: `${service.name} service, metered per call`,
         rate: BASE_RATE.toString(),
         pricing: (service as { pricing?: PaymentRequirements["pricing"] }).pricing,
-        rateCommitment: hash.computePoseidonHashOnElements([BASE_RATE, RATE_BLIND]),
+        rateCommitment: RATE_COMMITMENT,
         channelId: CHANNEL_ID.toString(),
         settlementContract: SETTLEMENT_CONTRACT,
         minSettlementUnits: MIN_SETTLEMENT_UNITS.toString(),
@@ -166,6 +184,13 @@ const server = createServer((req, res) => {
         }
         if (voucher.channelId !== CHANNEL_ID) {
           json(res, 402, { error: `unknown channel ${voucher.channelId}`, ...paymentRequired() });
+          return;
+        }
+        // Pin the commitment. The signature covers it, so a voucher naming a
+        // different one is genuinely signed — just for a different rate than
+        // this provider agreed to be paid at.
+        if (BigInt(voucher.rateCommitment) !== BigInt(RATE_COMMITMENT)) {
+          json(res, 402, { error: "voucher is signed against a different rate", ...paymentRequired() });
           return;
         }
         const signer = BigInt(starkKeyOf(voucher.pubkey)).toString();

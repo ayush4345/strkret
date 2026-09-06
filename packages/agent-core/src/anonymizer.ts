@@ -22,6 +22,15 @@ export interface ProviderClaim {
 }
 
 /** Build a claim from a signed voucher and the rate it was agreed at. */
+/**
+ * Build a claim from a signed voucher and the rate witnesses that open its
+ * commitment. The commitment comes from the voucher rather than being
+ * recomputed here: the voucher's signature covers it, so using any other
+ * value produces a claim the contract rejects — which is the point. If the
+ * supplied `rate`/`rateBlind` don't open the committed value, this fails
+ * on-chain as BAD_RATE_COMMITMENT rather than silently settling at a rate
+ * nobody agreed to.
+ */
 export function claimFromVoucher(
   voucher: Voucher,
   rate: bigint,
@@ -31,7 +40,7 @@ export function claimFromVoucher(
   return {
     rate,
     rateBlind,
-    rateCommitment: hash.computePoseidonHashOnElements([rate, rateBlind]),
+    rateCommitment: voucher.rateCommitment,
     channelId: voucher.channelId,
     totalUnits: voucher.totalUnits,
     consumerStarkKey: starkKeyOf(voucher.pubkey),

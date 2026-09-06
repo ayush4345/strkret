@@ -18,6 +18,19 @@ export interface Voucher {
   channelId: bigint;
   totalUnits: bigint;
   /**
+   * The rate commitment this voucher is signed against — `poseidon(rate,
+   * blind)`, published by the provider at channel open.
+   *
+   * It is part of the signed message, and that is load-bearing. Settlement
+   * pays `units × rate`, and the contract can only check a rate against a
+   * commitment; if the commitment were merely passed in calldata beside the
+   * rate, that check would be circular — it would prove only that whoever
+   * built the transaction can hash two numbers it chose itself. Signing over
+   * the commitment is what makes the rate something the consumer actually
+   * agreed to rather than something the settling party picks.
+   */
+  rateCommitment: string;
+  /**
    * Full uncompressed public key (`0x04 || x || y`). This is what
    * starknet.js's `verify` needs — passing the stark key here silently
    * returns false rather than throwing, which is a genuinely nasty way to
@@ -30,13 +43,17 @@ export interface Voucher {
 
 /**
  * The message the signature covers. MUST stay identical to the Cairo side's
- * `poseidon_hash_span([channel_id, total_units])` in
+ * `poseidon_hash_span([channel_id, total_units, rate_commitment])` in
  * `contracts/metering-anonymizer/src/lib.cairo` — a mismatch here doesn't
  * fail loudly at the boundary, it fails on-chain at settlement as
  * BAD_SIGNATURE, after the work has already been served.
  */
-export function voucherMessageHash(channelId: bigint, totalUnits: bigint): string {
-  return hash.computePoseidonHashOnElements([channelId, totalUnits]);
+export function voucherMessageHash(
+  channelId: bigint,
+  totalUnits: bigint,
+  rateCommitment: string,
+): string {
+  return hash.computePoseidonHashOnElements([channelId, totalUnits, rateCommitment]);
 }
 
 /**
@@ -50,11 +67,17 @@ export function starkKeyOf(pubkey: string): string {
   return "0x" + pubkey.replace(/^0x04/, "").slice(0, 64).replace(/^0+/, "");
 }
 
-export function signVoucher(channelId: bigint, totalUnits: bigint, privateKey: string): Voucher {
-  const sig = ec.starkCurve.sign(voucherMessageHash(channelId, totalUnits), privateKey);
+export function signVoucher(
+  channelId: bigint,
+  totalUnits: bigint,
+  rateCommitment: string,
+  privateKey: string,
+): Voucher {
+  const sig = ec.starkCurve.sign(voucherMessageHash(channelId, totalUnits, rateCommitment), privateKey);
   return {
     channelId,
     totalUnits,
+    rateCommitment,
     pubkey: "0x" + Buffer.from(ec.starkCurve.getPublicKey(privateKey)).toString("hex"),
     sigR: "0x" + sig.r.toString(16),
     sigS: "0x" + sig.s.toString(16),
@@ -65,17 +88,20 @@ export function signVoucher(channelId: bigint, totalUnits: bigint, privateKey: s
  * Verify a voucher's signature against the pubkey it carries.
  *
  * Note what this does and does not establish: it proves the holder of that
- * pubkey's private key authorized this (channelId, totalUnits). It says
+ * pubkey's private key authorized this (channelId, totalUnits,
+ * rateCommitment). It says
  * nothing about whether that pubkey is the consumer the provider expects —
  * the caller has to pin the pubkey it agreed a channel with, or an attacker
  * can sign a perfectly valid voucher with their own key and get served for
- * free.
+ * free. A provider must equally pin the `rateCommitment` it published: a
+ * voucher signed over some *other* commitment verifies perfectly well and
+ * settles at whatever rate that commitment opens to.
  */
 export function verifyVoucher(voucher: Voucher): boolean {
   try {
     return ec.starkCurve.verify(
       new ec.starkCurve.Signature(BigInt(voucher.sigR), BigInt(voucher.sigS)),
-      voucherMessageHash(voucher.channelId, voucher.totalUnits),
+      voucherMessageHash(voucher.channelId, voucher.totalUnits, voucher.rateCommitment),
       voucher.pubkey,
     );
   } catch {

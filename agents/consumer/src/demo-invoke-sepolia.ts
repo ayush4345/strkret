@@ -17,6 +17,7 @@
  * evidently didn't block it here — worth understanding precisely before
  * relying on it (see the contract README), but not worth blocking on.
  */
+import { hash } from "starknet";
 import { Open } from "@starkware-libs/starknet-privacy-sdk";
 import { createPoolContract, createPrivacyClient } from "@strkret/privacy-client";
 import { claimFromVoucher, encodeInvokeCalldata, signVoucher } from "@strkret/agent-core";
@@ -62,7 +63,9 @@ async function main() {
   // the 0x1 test vector demo-invoke-devnet.ts / the Cairo tests use.
   // Sign through the shared helper so the message stays identical to what
   // the contract verifies — recomputing the hash here is how those drift.
-  const voucher = signVoucher(channelId, totalUnits, env.consumer.privateKey);
+  // The rate the settlement is pinned to — signed, not merely passed.
+  const rateCommitment = hash.computePoseidonHashOnElements([rate, rateBlind]);
+  const voucher = signVoucher(channelId, totalUnits, rateCommitment, env.consumer.privateKey);
 
   // Fresh escrow deposit. Approve for the deposit AND the invoke — each is
   // its own apply_actions call, each charged the pool's protocol fee

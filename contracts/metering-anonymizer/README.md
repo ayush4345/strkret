@@ -41,8 +41,20 @@ Per claim in the batch:
 1. `rate_commitment == poseidon(rate, rate_blind)` — the settlement uses the
    same rate committed to at channel-open, without revealing it.
 2. The consumer's own STARK-curve signature over
-   `poseidon(channel_id, total_units)` — proof the consumer, not the
-   provider, authorized paying for exactly `total_units`.
+   `poseidon(channel_id, total_units, rate_commitment)` — proof the consumer,
+   not the provider, authorized paying for exactly `total_units` **at the
+   committed rate**.
+
+   The commitment is inside the signed message, and that is what makes the
+   amount enforceable. Check 1 on its own is circular: `rate`, `rate_blind`
+   and `rate_commitment` all arrive in the same calldata from the same
+   caller, so it proves only that whoever built the transaction can hash two
+   numbers it chose. Before the commitment was signed, whoever assembled the
+   settlement picked the payout — a consumer could settle a 100-unit voucher
+   at rate 1 instead of the agreed 5 and the contract would accept it, which
+   defeated the contract's entire purpose. A provider must correspondingly
+   refuse any voucher not signed over the commitment it published at channel
+   open.
 3. The voucher is strictly newer than this channel's high-water mark
    (`settled_units` map, keyed by `poseidon(consumer_pubkey, channel_id)`)
    — see below.
@@ -85,6 +97,16 @@ that consumer.
 
 ## Security review needed before any deploy
 
+- **Settled findings, kept for the record.** The signature originally covered
+  only `(channel_id, total_units)`, leaving the rate unbound and the
+  settlement amount at the discretion of whoever assembled the transaction;
+  the commitment is now part of the signed message. Still open and worth a
+  reviewer's attention: `token` is caller-supplied and receives external
+  calls (`balance_of`, `approve`), so an arbitrary address is a fake-balance
+  and reentrancy surface; escrow is read as the contract's entire balance, so
+  stray tokens are swept into the next settlement's refund; the pool's
+  allowance is never reset; and the `u256 -> u128` balance conversion panics
+  above `u128::MAX`.
 - **The signature check is the highest-risk part.** A bug here lets anyone
   who can see a voucher (which the provider legitimately does, as part of
   normal metering) forge a settlement claim. Independently verify
@@ -107,7 +129,7 @@ that consumer.
 
 ## Testing
 
-`snforge test` — 12 tests, including a happy-path case using a real
+`snforge test` — 13 tests, including a happy-path case using a real
 STARK-curve signature generated with starknet.js (the same library the
 production TS client uses) for `private_key = 0x1`, verified correctly by
 the on-chain `check_ecdsa_signature` call. That's evidence the signing and

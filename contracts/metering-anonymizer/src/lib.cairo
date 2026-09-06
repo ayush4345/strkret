@@ -155,13 +155,23 @@ pub mod MeteringAnonymizer {
                 );
                 assert(computed_commitment == claim.rate_commitment, errors::BAD_RATE_COMMITMENT);
 
-                // The consumer's own signature over (channel_id, total_units)
-                // is the only thing that authorizes this settlement — not a
-                // provider claim, not this contract's own judgement. Each
-                // claim carries its own, so one consumer's signature can never
-                // authorize a payout to a provider it did not agree with.
+                // The consumer's own signature is the only thing that
+                // authorizes this settlement — not a provider claim, not this
+                // contract's own judgement. Each claim carries its own, so one
+                // consumer's signature can never authorize a payout to a
+                // provider it did not agree with.
+                //
+                // `rate_commitment` is inside the signed message, and that is
+                // what makes the amount enforceable. The commitment check
+                // above only proves `rate` opens `rate_commitment`; both
+                // arrive in the same calldata, so on its own it proves the
+                // caller can hash two numbers it chose. Binding the commitment
+                // into the signature is what pins the settlement to a rate the
+                // consumer actually agreed to — without it, whoever builds the
+                // transaction picks the payout, and a consumer could settle a
+                // 100-unit voucher at rate 1 instead of the agreed 5.
                 let message_hash = poseidon_hash_span(
-                    [claim.channel_id, claim.total_units.into()].span(),
+                    [claim.channel_id, claim.total_units.into(), claim.rate_commitment].span(),
                 );
                 let valid = check_ecdsa_signature(
                     message_hash, claim.consumer_pubkey, claim.sig_r, claim.sig_s,
