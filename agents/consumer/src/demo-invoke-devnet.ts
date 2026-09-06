@@ -18,6 +18,7 @@ import { Open } from "@starkware-libs/starknet-privacy-sdk";
 import type { CallAndProof } from "@starkware-libs/starknet-privacy-sdk";
 import { ec, hash } from "starknet";
 import type { Account, RpcProvider } from "starknet";
+import { claimFromVoucher, encodeInvokeCalldata, signVoucher } from "@strkret/agent-core";
 
 const CONTRACT_DIR = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -106,14 +107,11 @@ async function main() {
     // signature this script produces and the one the Cairo test hardcodes
     // are directly comparable.
     const consumerPrivateKey = "0x1";
-    const consumerPubkey = ec.starkCurve.getStarkKey(consumerPrivateKey);
     const channelId = 1n;
     const totalUnits = 100n;
     const rate = 5n;
     const rateBlind = 42n;
-    const rateCommitment = hash.computePoseidonHashOnElements([rate, rateBlind]);
-    const messageHash = hash.computePoseidonHashOnElements([channelId, totalUnits]);
-    const sig = ec.starkCurve.sign(messageHash, consumerPrivateKey);
+    const voucher = signVoucher(channelId, totalUnits, consumerPrivateKey);
     const escrowAmount = 1000n;
     const settlement = rate * totalUnits;
 
@@ -167,19 +165,14 @@ async function main() {
         }
         return {
           contractAddress: anonymizerAddress,
-          calldata: [
+          // A one-entry batch. The contract takes a span of claims so a
+          // consumer that used several providers pays them all in one
+          // settlement; paying one provider is just the smallest case of it.
+          calldata: encodeInvokeCalldata(
             strk,
-            rate,
-            rateBlind,
-            rateCommitment,
-            channelId,
-            totalUnits,
-            consumerPubkey,
-            "0x" + sig.r.toString(16),
-            "0x" + sig.s.toString(16),
-            providerNote.noteId,
+            [claimFromVoucher(voucher, rate, rateBlind, providerNote.noteId)],
             refundNote.noteId,
-          ],
+          ),
         };
       })
       .execute({ provingBlockId: settleBlockId });

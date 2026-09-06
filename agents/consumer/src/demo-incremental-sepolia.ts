@@ -14,13 +14,12 @@
  * everything it receives in the same call — the escrow is consumed per
  * settlement, only the high-water mark persists between them.
  */
-import { hash } from "starknet";
 import { Open } from "@starkware-libs/starknet-privacy-sdk";
 import { createPoolContract, createPrivacyClient } from "@strkret/privacy-client";
-import { signVoucher, starkKeyOf } from "@strkret/agent-core";
+import { claimFromVoucher, encodeInvokeCalldata, signVoucher } from "@strkret/agent-core";
 import { env } from "./env.js";
 
-const ANONYMIZER_ADDRESS = "0x0507f521cfe282d8992caf6047eaee614690ea707eee28e8b6018145ce4cd1e6";
+const ANONYMIZER_ADDRESS = "0x0416e8f8426ad158b0802d62035f81f9a3efb89f11b69be7f48ca790b1ec4d7e";
 
 type Client = Awaited<ReturnType<typeof createPrivacyClient>>;
 
@@ -37,7 +36,7 @@ const RATE = 5n;
 const RATE_BLIND = 42n;
 // A channel this account has not settled on before — the mark starts at 0,
 // so round 1's delta is its full total. Bump this to rerun from scratch.
-const CHANNEL_ID = 7n;
+const CHANNEL_ID = 11n;
 /**
  * What to approve per fee-charged call. Read from the pool rather than
  * hardcoded — Sepolia charges 2 STRK and mainnet 6, so a constant is only
@@ -64,7 +63,6 @@ async function settleRound(
   // Sign through the shared helper so the message stays identical to what
   // the contract verifies — recomputing the hash here is how those drift.
   const voucher = signVoucher(CHANNEL_ID, totalUnits, env.consumer.privateKey);
-  const rateCommitment = hash.computePoseidonHashOnElements([RATE, RATE_BLIND]);
 
   const approveTx = await consumer.account.execute(
     {
@@ -104,19 +102,11 @@ async function settleRound(
       }
       return {
         contractAddress: ANONYMIZER_ADDRESS,
-        calldata: [
+        calldata: encodeInvokeCalldata(
           env.tokenAddress,
-          RATE,
-          RATE_BLIND,
-          rateCommitment,
-          CHANNEL_ID,
-          totalUnits,
-          starkKeyOf(voucher.pubkey),
-          voucher.sigR,
-          voucher.sigS,
-          providerNote.noteId,
+          [claimFromVoucher(voucher, RATE, RATE_BLIND, providerNote.noteId)],
           refundNote.noteId,
-        ],
+        ),
       };
     })
     .execute({ provingBlockId: settleBlockId });

@@ -11,7 +11,32 @@ making the settlement amount (not the rate, not the unit count, not either
 party's identity) public. See the root README's "Anonymizer contract:
 settlement public, correctness enforced" section for the full reasoning.
 
+## Batched settlement
+
+`privacy_invoke` takes a **span of claims**, one per provider being paid out
+of the escrow, and returns one deposit per claim in claim order plus a
+trailing refund. Each claim carries its own voucher, rate commitment and
+signature, so one consumer's signature can never authorize a payout to a
+provider it did not agree with.
+
+This is the point of the contract's shape, not a convenience. The pool
+charges a flat protocol fee per settlement (6 STRK on mainnet), so a consumer
+that used ten provider agents pays 60 STRK settling them one at a time and 6
+settling them together. The per-counterparty overhead falls as the batch
+grows, which is the only lever that exists — the fee itself is fixed.
+
+Two things follow from batching that per-claim checks would miss, and both
+are tested:
+
+- **The escrow cap is checked against the batch total.** Claims that each fit
+  individually can still exceed the escrow together.
+- **A channel listed twice in one batch cannot be paid twice.** The
+  high-water mark is written inside the loop, so the second entry sees the
+  first as already settled and is rejected for not being strictly newer.
+
 ## What it checks
+
+Per claim in the batch:
 
 1. `rate_commitment == poseidon(rate, rate_blind)` — the settlement uses the
    same rate committed to at channel-open, without revealing it.
@@ -21,9 +46,9 @@ settlement public, correctness enforced" section for the full reasoning.
 3. The voucher is strictly newer than this channel's high-water mark
    (`settled_units` map, keyed by `poseidon(consumer_pubkey, channel_id)`)
    — see below.
-4. `settlement = (total_units - already_settled) * rate <= escrow_amount`
-   (escrow measured from this contract's own token balance, never trusted
-   as a calldata argument).
+4. `settlement = (total_units - already_settled) * rate`, with the **sum**
+   across the batch capped at `escrow_amount` (escrow measured from this
+   contract's own token balance, never trusted as a calldata argument).
 
 ## Incremental vouchers and the high-water mark
 
@@ -82,7 +107,7 @@ that consumer.
 
 ## Testing
 
-`snforge test` — 8 tests, including a happy-path case using a real
+`snforge test` — 12 tests, including a happy-path case using a real
 STARK-curve signature generated with starknet.js (the same library the
 production TS client uses) for `private_key = 0x1`, verified correctly by
 the on-chain `check_ecdsa_signature` call. That's evidence the signing and

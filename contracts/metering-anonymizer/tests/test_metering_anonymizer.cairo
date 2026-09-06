@@ -1,4 +1,6 @@
-use metering_anonymizer::{IMeteringAnonymizerDispatcher, IMeteringAnonymizerDispatcherTrait};
+use metering_anonymizer::{
+    IMeteringAnonymizerDispatcher, IMeteringAnonymizerDispatcherTrait, ProviderClaim,
+};
 use openzeppelin::interfaces::token::erc20::{IERC20Dispatcher, IERC20DispatcherTrait};
 use snforge_std::{ContractClassTrait, DeclareResultTrait, declare, start_cheat_caller_address};
 use starknet::ContractAddress;
@@ -29,7 +31,44 @@ const RATE_COMMITMENT: felt252 = 0x6543d1c88b2dbfa68234938d4b8fb03ade9966495f58a
 const ESCROW_AMOUNT: u256 = 1000;
 const EXPECTED_SETTLEMENT: u128 = 500; // RATE * TOTAL_UNITS
 const PROVIDER_NOTE_ID: felt252 = 111;
+const PROVIDER_2_NOTE_ID: felt252 = 333;
 const REFUND_NOTE_ID: felt252 = 222;
+
+// A second consumer paying a second provider, on its own channel — the batch
+// case. sign(poseidon(channel_id=2, total_units=100)) for private_key = 0x2.
+const C2_CHANNEL: felt252 = 2;
+const C2_UNITS: u128 = 100;
+const C2_PUBKEY: felt252 = 0x759ca09377679ecd535a81e83039658bf40959283187c654c5416f439403cf5;
+const C2_SIG_R: felt252 = 0x332fb9021b5926aa4f83592cd7ba101c6ac767c0f6afb22f607a84919c14e72;
+const C2_SIG_S: felt252 = 0x62fc025b81913eb0a64375df3cbc0d87558ce60daf9785c79a073de34fae029;
+
+/// Assemble one claim at the shared rate. Every test builds claims through
+/// this, so a signature and the units it covers cannot drift apart by hand.
+fn claim(
+    channel_id: felt252,
+    total_units: u128,
+    pubkey: felt252,
+    sig_r: felt252,
+    sig_s: felt252,
+    note_id: felt252,
+) -> ProviderClaim {
+    ProviderClaim {
+        rate: RATE,
+        rate_blind: RATE_BLIND,
+        rate_commitment: RATE_COMMITMENT,
+        channel_id,
+        total_units,
+        consumer_pubkey: pubkey,
+        sig_r,
+        sig_s,
+        provider_note_id: note_id,
+    }
+}
+
+/// The single-consumer claim most tests use.
+fn consumer_claim(total_units: u128, sig_r: felt252, sig_s: felt252) -> ProviderClaim {
+    claim(CHANNEL_ID, total_units, CONSUMER_PUBKEY, sig_r, sig_s, PROVIDER_NOTE_ID)
+}
 
 fn deploy_mock_erc20(recipient: ContractAddress, amount: u256) -> ContractAddress {
     let contract = declare("MockErc20").unwrap().contract_class();
@@ -55,19 +94,7 @@ fn splits_settlement_and_refund_correctly() {
     start_cheat_caller_address(anonymizer, pool);
 
     let deposits = IMeteringAnonymizerDispatcher { contract_address: anonymizer }
-        .privacy_invoke(
-            token,
-            RATE,
-            RATE_BLIND,
-            RATE_COMMITMENT,
-            CHANNEL_ID,
-            TOTAL_UNITS,
-            CONSUMER_PUBKEY,
-            SIG_R,
-            SIG_S,
-            PROVIDER_NOTE_ID,
-            REFUND_NOTE_ID,
-        );
+        .privacy_invoke(token, array![consumer_claim(TOTAL_UNITS, SIG_R, SIG_S)].span(), REFUND_NOTE_ID);
 
     assert(deposits.len() == 2, 'expected 2 deposits');
     let provider_deposit = *deposits.at(0);
@@ -95,10 +122,7 @@ fn rejects_tampered_total_units() {
     // Same signature, but claiming 200 units instead of the 100 it was
     // actually signed for — must not verify.
     IMeteringAnonymizerDispatcher { contract_address: anonymizer }
-        .privacy_invoke(
-            token, RATE, RATE_BLIND, RATE_COMMITMENT, CHANNEL_ID, 200_u128,
-            CONSUMER_PUBKEY, SIG_R, SIG_S, PROVIDER_NOTE_ID, REFUND_NOTE_ID,
-        );
+        .privacy_invoke(token, array![consumer_claim(200_u128, SIG_R, SIG_S)].span(), REFUND_NOTE_ID);
 }
 
 #[test]
@@ -111,8 +135,22 @@ fn rejects_wrong_rate_for_commitment() {
     // A different rate that doesn't hash to RATE_COMMITMENT.
     IMeteringAnonymizerDispatcher { contract_address: anonymizer }
         .privacy_invoke(
-            token, 6_u128, RATE_BLIND, RATE_COMMITMENT, CHANNEL_ID, TOTAL_UNITS,
-            CONSUMER_PUBKEY, SIG_R, SIG_S, PROVIDER_NOTE_ID, REFUND_NOTE_ID,
+            token,
+            array![
+                ProviderClaim {
+                    rate: 6_u128,
+                    rate_blind: RATE_BLIND,
+                    rate_commitment: RATE_COMMITMENT,
+                    channel_id: CHANNEL_ID,
+                    total_units: TOTAL_UNITS,
+                    consumer_pubkey: CONSUMER_PUBKEY,
+                    sig_r: SIG_R,
+                    sig_s: SIG_S,
+                    provider_note_id: PROVIDER_NOTE_ID,
+                },
+            ]
+                .span(),
+            REFUND_NOTE_ID,
         );
 }
 
@@ -127,15 +165,9 @@ fn rejects_replayed_voucher() {
 
     let dispatcher = IMeteringAnonymizerDispatcher { contract_address: anonymizer };
     dispatcher
-        .privacy_invoke(
-            token, RATE, RATE_BLIND, RATE_COMMITMENT, CHANNEL_ID, TOTAL_UNITS,
-            CONSUMER_PUBKEY, SIG_R, SIG_S, PROVIDER_NOTE_ID, REFUND_NOTE_ID,
-        );
+        .privacy_invoke(token, array![consumer_claim(TOTAL_UNITS, SIG_R, SIG_S)].span(), REFUND_NOTE_ID);
     dispatcher
-        .privacy_invoke(
-            token, RATE, RATE_BLIND, RATE_COMMITMENT, CHANNEL_ID, TOTAL_UNITS,
-            CONSUMER_PUBKEY, SIG_R, SIG_S, PROVIDER_NOTE_ID, REFUND_NOTE_ID,
-        );
+        .privacy_invoke(token, array![consumer_claim(TOTAL_UNITS, SIG_R, SIG_S)].span(), REFUND_NOTE_ID);
 }
 
 /// Incremental vouchers: settling a newer voucher on a channel pays only
@@ -150,19 +182,13 @@ fn settles_only_the_delta_on_a_newer_voucher() {
     let dispatcher = IMeteringAnonymizerDispatcher { contract_address: anonymizer };
 
     let first = dispatcher
-        .privacy_invoke(
-            token, RATE, RATE_BLIND, RATE_COMMITMENT, CHANNEL_ID, TOTAL_UNITS,
-            CONSUMER_PUBKEY, SIG_R, SIG_S, PROVIDER_NOTE_ID, REFUND_NOTE_ID,
-        );
+        .privacy_invoke(token, array![consumer_claim(TOTAL_UNITS, SIG_R, SIG_S)].span(), REFUND_NOTE_ID);
     assert(*first.at(0).amount == EXPECTED_SETTLEMENT, 'wrong first settlement');
 
     // 150 cumulative units against a mark of 100 — only the 50 new units
     // are payable, so 250, not the 750 a cumulative reading would give.
     let second = dispatcher
-        .privacy_invoke(
-            token, RATE, RATE_BLIND, RATE_COMMITMENT, CHANNEL_ID, TOTAL_UNITS_2,
-            CONSUMER_PUBKEY, SIG_R_2, SIG_S_2, PROVIDER_NOTE_ID, REFUND_NOTE_ID,
-        );
+        .privacy_invoke(token, array![consumer_claim(TOTAL_UNITS_2, SIG_R_2, SIG_S_2)].span(), REFUND_NOTE_ID);
     assert(*second.at(0).amount == (TOTAL_UNITS_2 - TOTAL_UNITS) * RATE, 'wrong delta settlement');
 }
 
@@ -179,20 +205,13 @@ fn channels_are_isolated_per_consumer() {
 
     // Consumer 1 settles 100 units on channel 1, taking that mark to 100.
     dispatcher
-        .privacy_invoke(
-            token, RATE, RATE_BLIND, RATE_COMMITMENT, CHANNEL_ID, TOTAL_UNITS,
-            CONSUMER_PUBKEY, SIG_R, SIG_S, PROVIDER_NOTE_ID, REFUND_NOTE_ID,
-        );
+        .privacy_invoke(token, array![consumer_claim(TOTAL_UNITS, SIG_R, SIG_S)].span(), REFUND_NOTE_ID);
 
     // Consumer 2's first voucher on the same channel id is also 100 units.
     // Keyed on channel_id alone this would be rejected as stale; keyed on
     // (pubkey, channel_id) it settles in full.
     let second = dispatcher
-        .privacy_invoke(
-            token, RATE, RATE_BLIND, RATE_COMMITMENT, CHANNEL_ID, TOTAL_UNITS,
-            CONSUMER_2_PUBKEY, CONSUMER_2_SIG_R, CONSUMER_2_SIG_S,
-            PROVIDER_NOTE_ID, REFUND_NOTE_ID,
-        );
+        .privacy_invoke(token, array![claim(CHANNEL_ID, TOTAL_UNITS, CONSUMER_2_PUBKEY, CONSUMER_2_SIG_R, CONSUMER_2_SIG_S, PROVIDER_NOTE_ID)].span(), REFUND_NOTE_ID);
     assert(*second.at(0).amount == EXPECTED_SETTLEMENT, 'consumer 2 was not isolated');
 }
 
@@ -208,15 +227,9 @@ fn rejects_stale_voucher_after_a_newer_one_settled() {
     let dispatcher = IMeteringAnonymizerDispatcher { contract_address: anonymizer };
 
     dispatcher
-        .privacy_invoke(
-            token, RATE, RATE_BLIND, RATE_COMMITMENT, CHANNEL_ID, TOTAL_UNITS_2,
-            CONSUMER_PUBKEY, SIG_R_2, SIG_S_2, PROVIDER_NOTE_ID, REFUND_NOTE_ID,
-        );
+        .privacy_invoke(token, array![consumer_claim(TOTAL_UNITS_2, SIG_R_2, SIG_S_2)].span(), REFUND_NOTE_ID);
     dispatcher
-        .privacy_invoke(
-            token, RATE, RATE_BLIND, RATE_COMMITMENT, CHANNEL_ID, TOTAL_UNITS,
-            CONSUMER_PUBKEY, SIG_R, SIG_S, PROVIDER_NOTE_ID, REFUND_NOTE_ID,
-        );
+        .privacy_invoke(token, array![consumer_claim(TOTAL_UNITS, SIG_R, SIG_S)].span(), REFUND_NOTE_ID);
 }
 
 #[test]
@@ -228,8 +241,96 @@ fn rejects_settlement_above_escrow() {
     start_cheat_caller_address(anonymizer, 0x999.try_into().unwrap());
 
     IMeteringAnonymizerDispatcher { contract_address: anonymizer }
+        .privacy_invoke(token, array![consumer_claim(TOTAL_UNITS, SIG_R, SIG_S)].span(), REFUND_NOTE_ID);
+}
+
+/// The batching case the whole design exists for: two providers, two
+/// consumers, one settlement — so the pool's flat protocol fee is paid once
+/// instead of once per counterparty.
+#[test]
+fn settles_several_providers_in_one_call() {
+    let anonymizer = deploy_anonymizer();
+    let token = deploy_mock_erc20(anonymizer, ESCROW_AMOUNT * 2);
+    start_cheat_caller_address(anonymizer, 0x999.try_into().unwrap());
+
+    let deposits = IMeteringAnonymizerDispatcher { contract_address: anonymizer }
         .privacy_invoke(
-            token, RATE, RATE_BLIND, RATE_COMMITMENT, CHANNEL_ID, TOTAL_UNITS,
-            CONSUMER_PUBKEY, SIG_R, SIG_S, PROVIDER_NOTE_ID, REFUND_NOTE_ID,
+            token,
+            array![
+                consumer_claim(TOTAL_UNITS, SIG_R, SIG_S),
+                claim(C2_CHANNEL, C2_UNITS, C2_PUBKEY, C2_SIG_R, C2_SIG_S, PROVIDER_2_NOTE_ID),
+            ]
+                .span(),
+            REFUND_NOTE_ID,
         );
+
+    // One deposit per claim, in claim order, then the refund.
+    assert(deposits.len() == 3, 'expected 3 deposits');
+    assert(*deposits.at(0).note_id == PROVIDER_NOTE_ID, 'wrong provider 1 note');
+    assert(*deposits.at(0).amount == EXPECTED_SETTLEMENT, 'wrong provider 1 amount');
+    assert(*deposits.at(1).note_id == PROVIDER_2_NOTE_ID, 'wrong provider 2 note');
+    assert(*deposits.at(1).amount == C2_UNITS * RATE, 'wrong provider 2 amount');
+    assert(*deposits.at(2).note_id == REFUND_NOTE_ID, 'wrong refund note');
+    assert(
+        *deposits.at(2).amount == (ESCROW_AMOUNT * 2 - (EXPECTED_SETTLEMENT + C2_UNITS * RATE)
+            .into())
+            .try_into()
+            .unwrap(),
+        'wrong refund amount',
+    );
+}
+
+/// A batch listing one channel twice must not pay it twice. The mark is
+/// written inside the loop, so the second entry sees the first as already
+/// settled and is rejected for not being strictly newer.
+#[should_panic(expected: 'VOUCHER_ALREADY_USED')]
+#[test]
+fn rejects_a_channel_listed_twice_in_one_batch() {
+    let anonymizer = deploy_anonymizer();
+    let token = deploy_mock_erc20(anonymizer, ESCROW_AMOUNT * 2);
+    start_cheat_caller_address(anonymizer, 0x999.try_into().unwrap());
+
+    IMeteringAnonymizerDispatcher { contract_address: anonymizer }
+        .privacy_invoke(
+            token,
+            array![
+                consumer_claim(TOTAL_UNITS, SIG_R, SIG_S),
+                consumer_claim(TOTAL_UNITS, SIG_R, SIG_S),
+            ]
+                .span(),
+            REFUND_NOTE_ID,
+        );
+}
+
+/// Claims that each fit inside the escrow can still exceed it together, so
+/// the cap is checked against the batch total rather than per claim.
+#[should_panic(expected: 'SETTLEMENT_EXCEEDS_ESCROW')]
+#[test]
+fn rejects_a_batch_that_exceeds_escrow_in_aggregate() {
+    let anonymizer = deploy_anonymizer();
+    // 600 covers either 500-unit claim alone, but not both.
+    let token = deploy_mock_erc20(anonymizer, 600);
+    start_cheat_caller_address(anonymizer, 0x999.try_into().unwrap());
+
+    IMeteringAnonymizerDispatcher { contract_address: anonymizer }
+        .privacy_invoke(
+            token,
+            array![
+                consumer_claim(TOTAL_UNITS, SIG_R, SIG_S),
+                claim(C2_CHANNEL, C2_UNITS, C2_PUBKEY, C2_SIG_R, C2_SIG_S, PROVIDER_2_NOTE_ID),
+            ]
+                .span(),
+            REFUND_NOTE_ID,
+        );
+}
+
+#[should_panic(expected: 'NO_CLAIMS')]
+#[test]
+fn rejects_an_empty_batch() {
+    let anonymizer = deploy_anonymizer();
+    let token = deploy_mock_erc20(anonymizer, ESCROW_AMOUNT);
+    start_cheat_caller_address(anonymizer, 0x999.try_into().unwrap());
+
+    IMeteringAnonymizerDispatcher { contract_address: anonymizer }
+        .privacy_invoke(token, array![].span(), REFUND_NOTE_ID);
 }

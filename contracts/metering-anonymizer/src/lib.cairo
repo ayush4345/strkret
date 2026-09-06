@@ -10,6 +10,33 @@ pub mod mock_erc20;
 /// needed" section before any deploy — the signature check in particular
 /// must be independently reviewed: a bug there lets anyone forge a
 /// settlement.
+/// One provider's claim against the escrow: the voucher, the rate it was
+/// agreed at, and where to pay it. A settlement carries a span of these, so a
+/// consumer that used several provider agents pays them all in one
+/// `apply_actions` call rather than one call each.
+///
+/// That batching is the point. The pool charges a flat protocol fee per
+/// settlement (6 STRK on mainnet), so paying M providers separately costs M
+/// times the fee for the same work — with a batch it is paid once, and the
+/// per-counterparty overhead falls as the batch grows.
+#[derive(Copy, Drop, Serde)]
+pub struct ProviderClaim {
+    /// Private witnesses. Must hash to `rate_commitment`.
+    pub rate: u128,
+    pub rate_blind: felt252,
+    /// Published off-chain at channel open.
+    pub rate_commitment: felt252,
+    /// The channel's identity and the consumer-authorized cumulative usage.
+    pub channel_id: felt252,
+    pub total_units: u128,
+    /// Proof the consumer authorized paying for exactly `total_units`.
+    pub consumer_pubkey: felt252,
+    pub sig_r: felt252,
+    pub sig_s: felt252,
+    /// The open note the pool should credit this provider's settlement to.
+    pub provider_note_id: felt252,
+}
+
 #[starknet::interface]
 pub trait IMeteringAnonymizer<T> {
     /// Called by the STRK20 privacy pool via `INVOKE_SELECTOR`. `token` must
@@ -17,32 +44,24 @@ pub trait IMeteringAnonymizer<T> {
     /// escrowed amount is measured from this contract's own balance, never
     /// trusted as a calldata argument.
     ///
-    /// - `rate`, `rate_blind`: private witnesses. Must hash to
-    ///   `rate_commitment` (published off-chain, at channel open).
-    /// - `channel_id`, `total_units`: the metered session's identity and the
-    ///   consumer-authorized usage count. `total_units` is CUMULATIVE for the
+    /// - `claims`: one entry per provider being paid out of this escrow. Each
+    ///   carries its own voucher, so every provider is paid only what its own
+    ///   consumer signed for. `total_units` on each is CUMULATIVE for that
     ///   channel, not per-settlement — vouchers are incremental, each
-    ///   superseding the last, so a provider can hold an enforceable claim
-    ///   for everything served so far without touching the chain. Only the
-    ///   units not already settled on this channel get paid out here.
-    /// - `consumer_pubkey`, `sig_r`, `sig_s`: the consumer's STARK-curve
-    ///   signature over `poseidon(channel_id, total_units)` — proof the
-    ///   consumer, not the provider or anyone else, authorized paying for
-    ///   exactly `total_units`.
-    /// - `provider_note_id`, `refund_note_id`: open notes the pool should
-    ///   credit (computed client-side by the SDK, passed through calldata).
+    ///   superseding the last, so a provider holds an enforceable claim for
+    ///   everything served without touching the chain, and only the units not
+    ///   already settled on that channel get paid here.
+    /// - `refund_note_id`: open note for whatever escrow the claims don't
+    ///   consume. Both note ids are computed client-side by the SDK and passed
+    ///   through calldata.
+    ///
+    /// Returns one deposit per claim, in claim order, plus a trailing refund
+    /// deposit when the refund is non-zero — the caller relies on that order
+    /// to match deposits back to the notes it declared.
     fn privacy_invoke(
         ref self: T,
         token: ContractAddress,
-        rate: u128,
-        rate_blind: felt252,
-        rate_commitment: felt252,
-        channel_id: felt252,
-        total_units: u128,
-        consumer_pubkey: felt252,
-        sig_r: felt252,
-        sig_s: felt252,
-        provider_note_id: felt252,
+        claims: Span<ProviderClaim>,
         refund_note_id: felt252,
     ) -> Span<OpenNoteDeposit>;
 }
@@ -51,6 +70,7 @@ pub mod errors {
     pub const ZERO_TOKEN: felt252 = 'ZERO_TOKEN';
     pub const ZERO_RATE: felt252 = 'ZERO_RATE';
     pub const ZERO_UNITS: felt252 = 'ZERO_UNITS';
+    pub const NO_CLAIMS: felt252 = 'NO_CLAIMS';
     pub const ZERO_ESCROW: felt252 = 'ZERO_ESCROW';
     pub const BAD_RATE_COMMITMENT: felt252 = 'BAD_RATE_COMMITMENT';
     pub const BAD_SIGNATURE: felt252 = 'BAD_SIGNATURE';
@@ -68,7 +88,7 @@ pub mod MeteringAnonymizer {
     use privacy::objects::OpenNoteDeposit;
     use starknet::storage::{Map, StorageMapReadAccess, StorageMapWriteAccess};
     use starknet::{ContractAddress, get_caller_address, get_contract_address};
-    use super::{IMeteringAnonymizer, errors};
+    use super::{IMeteringAnonymizer, ProviderClaim, errors};
 
     #[storage]
     struct Storage {
@@ -99,52 +119,11 @@ pub mod MeteringAnonymizer {
         fn privacy_invoke(
             ref self: ContractState,
             token: ContractAddress,
-            rate: u128,
-            rate_blind: felt252,
-            rate_commitment: felt252,
-            channel_id: felt252,
-            total_units: u128,
-            consumer_pubkey: felt252,
-            sig_r: felt252,
-            sig_s: felt252,
-            provider_note_id: felt252,
+            claims: Span<ProviderClaim>,
             refund_note_id: felt252,
         ) -> Span<OpenNoteDeposit> {
             assert(token.is_non_zero(), errors::ZERO_TOKEN);
-            assert(rate.is_non_zero(), errors::ZERO_RATE);
-            assert(total_units.is_non_zero(), errors::ZERO_UNITS);
-
-            // The rate itself never appears in this function's success path
-            // on its own — only bound into a commitment check. Only the
-            // commitment (already public, from channel-open) and the
-            // resulting settlement amount become visible here.
-            let computed_commitment = poseidon_hash_span([rate.into(), rate_blind].span());
-            assert(computed_commitment == rate_commitment, errors::BAD_RATE_COMMITMENT);
-
-            // The consumer's own signature over (channel_id, total_units) is
-            // the only thing that authorizes this settlement — not a
-            // provider claim, not this contract's own judgement.
-            let message_hash = poseidon_hash_span([channel_id, total_units.into()].span());
-            let valid = check_ecdsa_signature(
-                message_hash, consumer_pubkey, sig_r, sig_s,
-            );
-            assert(valid, errors::BAD_SIGNATURE);
-
-            // Only the units beyond what this channel has already settled
-            // are payable. The strict `>` both rejects replays and keeps the
-            // subtraction below from underflowing.
-            //
-            // The mark is keyed by (consumer_pubkey, channel_id), not
-            // channel_id alone: `channel_id` is caller-chosen and carries no
-            // identity of its own, so keying on it alone would let two
-            // consumers who happened to pick the same value share a mark and
-            // cap or block each other's settlements. Binding it to the
-            // pubkey the signature above was just verified against isolates
-            // each consumer's channels to that consumer.
-            let channel_key = poseidon_hash_span([consumer_pubkey, channel_id].span());
-            let already_settled = self.settled_units.read(channel_key);
-            assert(total_units > already_settled, errors::VOUCHER_ALREADY_USED);
-            self.settled_units.write(channel_key, total_units);
+            assert(claims.len().is_non_zero(), errors::NO_CLAIMS);
 
             // Escrow was already sent to us by the pool before this call —
             // read it from our own balance rather than trust a calldata
@@ -158,23 +137,81 @@ pub mod MeteringAnonymizer {
                 .unwrap();
             assert(escrow_amount.is_non_zero(), errors::ZERO_ESCROW);
 
-            let settlement: u128 = (total_units - already_settled) * rate; // panics on overflow
-            assert(settlement <= escrow_amount, errors::SETTLEMENT_EXCEEDS_ESCROW);
+            let mut deposits: Array<OpenNoteDeposit> = ArrayTrait::new();
+            let mut total_settlement: u128 = 0;
+            let mut i: u32 = 0;
+
+            while i != claims.len() {
+                let claim = *claims.at(i);
+                assert(claim.rate.is_non_zero(), errors::ZERO_RATE);
+                assert(claim.total_units.is_non_zero(), errors::ZERO_UNITS);
+
+                // The rate itself never appears in this function's success
+                // path on its own — only bound into a commitment check. Only
+                // the commitment (already public, from channel-open) and the
+                // resulting settlement amount become visible here.
+                let computed_commitment = poseidon_hash_span(
+                    [claim.rate.into(), claim.rate_blind].span(),
+                );
+                assert(computed_commitment == claim.rate_commitment, errors::BAD_RATE_COMMITMENT);
+
+                // The consumer's own signature over (channel_id, total_units)
+                // is the only thing that authorizes this settlement — not a
+                // provider claim, not this contract's own judgement. Each
+                // claim carries its own, so one consumer's signature can never
+                // authorize a payout to a provider it did not agree with.
+                let message_hash = poseidon_hash_span(
+                    [claim.channel_id, claim.total_units.into()].span(),
+                );
+                let valid = check_ecdsa_signature(
+                    message_hash, claim.consumer_pubkey, claim.sig_r, claim.sig_s,
+                );
+                assert(valid, errors::BAD_SIGNATURE);
+
+                // Only the units beyond what this channel has already settled
+                // are payable. The strict `>` both rejects replays and keeps
+                // the subtraction below from underflowing.
+                //
+                // The mark is keyed by (consumer_pubkey, channel_id), not
+                // channel_id alone: `channel_id` is caller-chosen and carries
+                // no identity of its own, so keying on it alone would let two
+                // consumers who happened to pick the same value share a mark
+                // and cap or block each other's settlements.
+                //
+                // Written inside the loop rather than after it, so a batch
+                // that lists the same channel twice sees its own first entry
+                // as already settled and pays the second only the remaining
+                // delta — a duplicate cannot be used to pay twice.
+                let channel_key = poseidon_hash_span(
+                    [claim.consumer_pubkey, claim.channel_id].span(),
+                );
+                let already_settled = self.settled_units.read(channel_key);
+                assert(claim.total_units > already_settled, errors::VOUCHER_ALREADY_USED);
+                self.settled_units.write(channel_key, claim.total_units);
+
+                let settlement: u128 = (claim.total_units - already_settled)
+                    * claim.rate; // panics on overflow
+                total_settlement += settlement; // panics on overflow
+
+                deposits
+                    .append(
+                        OpenNoteDeposit {
+                            note_id: claim.provider_note_id, token, amount: settlement,
+                        },
+                    );
+                i += 1;
+            };
+
+            // Checked once against the whole batch: individually affordable
+            // claims can still exceed the escrow together.
+            assert(total_settlement <= escrow_amount, errors::SETTLEMENT_EXCEEDS_ESCROW);
 
             let pool = get_caller_address();
             token_dispatcher.approve(spender: pool, amount: escrow_amount.into());
 
-            let mut deposits: Array<OpenNoteDeposit> = ArrayTrait::new();
-            deposits
-                .append(
-                    OpenNoteDeposit { note_id: provider_note_id, token, amount: settlement },
-                );
-            let refund = escrow_amount - settlement;
+            let refund = escrow_amount - total_settlement;
             if refund.is_non_zero() {
-                deposits
-                    .append(
-                        OpenNoteDeposit { note_id: refund_note_id, token, amount: refund },
-                    );
+                deposits.append(OpenNoteDeposit { note_id: refund_note_id, token, amount: refund });
             }
             deposits.span()
         }

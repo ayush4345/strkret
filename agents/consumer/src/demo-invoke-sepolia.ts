@@ -17,13 +17,12 @@
  * evidently didn't block it here — worth understanding precisely before
  * relying on it (see the contract README), but not worth blocking on.
  */
-import { hash } from "starknet";
 import { Open } from "@starkware-libs/starknet-privacy-sdk";
 import { createPoolContract, createPrivacyClient } from "@strkret/privacy-client";
-import { signVoucher, starkKeyOf } from "@strkret/agent-core";
+import { claimFromVoucher, encodeInvokeCalldata, signVoucher } from "@strkret/agent-core";
 import { env } from "./env.js";
 
-const ANONYMIZER_ADDRESS = "0x0507f521cfe282d8992caf6047eaee614690ea707eee28e8b6018145ce4cd1e6";
+const ANONYMIZER_ADDRESS = "0x0416e8f8426ad158b0802d62035f81f9a3efb89f11b69be7f48ca790b1ec4d7e";
 
 async function waitBlocks(client: Awaited<ReturnType<typeof createPrivacyClient>>, blocks: number): Promise<void> {
   const target = (await client.provider.getBlockNumber()) + blocks;
@@ -64,7 +63,6 @@ async function main() {
   // Sign through the shared helper so the message stays identical to what
   // the contract verifies — recomputing the hash here is how those drift.
   const voucher = signVoucher(channelId, totalUnits, env.consumer.privateKey);
-  const rateCommitment = hash.computePoseidonHashOnElements([rate, rateBlind]);
 
   // Fresh escrow deposit. Approve for the deposit AND the invoke — each is
   // its own apply_actions call, each charged the pool's protocol fee
@@ -117,19 +115,11 @@ async function main() {
       }
       return {
         contractAddress: ANONYMIZER_ADDRESS,
-        calldata: [
+        calldata: encodeInvokeCalldata(
           env.tokenAddress,
-          rate,
-          rateBlind,
-          rateCommitment,
-          channelId,
-          totalUnits,
-          starkKeyOf(voucher.pubkey),
-          voucher.sigR,
-          voucher.sigS,
-          providerNote.noteId,
+          [claimFromVoucher(voucher, rate, rateBlind, providerNote.noteId)],
           refundNote.noteId,
-        ],
+        ),
       };
     })
     .execute({ provingBlockId: settleBlockId });

@@ -411,7 +411,11 @@ that is the replay guard doing its job.
 - [x] Verified end-to-end on real Sepolia — both settlement paths: plain
       `transfer()` (`demo.ts`) and the anonymizer contract
       (`demo-invoke-sepolia.ts`)
-- [x] Anonymizer contract (`contracts/metering-anonymizer`) — draft, 8/8
+- [x] Batched settlement — `privacy_invoke` takes a span of provider claims,
+      so a consumer using M provider agents pays them in **one** settlement
+      instead of M. At 6 STRK a settlement that is the difference between 6
+      and 6M, and the only lever available since the fee itself is flat
+- [x] Anonymizer contract (`contracts/metering-anonymizer`) — draft, 12/12
       tests pass, verified on devnet and Sepolia; still needs a security
       review before mainnet (see that package's README)
 - [x] Incremental vouchers with a per-channel high-water mark, so a
