@@ -114,6 +114,56 @@ that for free from primitives that exist for other reasons.
 
 ## How it fits together
 
+The pieces, and which of them ever touches the chain:
+
+```mermaid
+flowchart TB
+    subgraph CP["Consumer process"]
+        RES["RemoteEchoService<br/>opens channel from 402,<br/>signs a voucher per call,<br/>resyncs within its own ceiling"]
+        RUN["runSession<br/>approve → deposit → meter →<br/>settle on threshold or close"]
+    end
+
+    subgraph PP["Provider process"]
+        SRV["server.ts — payment gate<br/>402 + accepts, verify signature,<br/>require claim grew ≥ price,<br/>optional pubkey pinning"]
+        ECHO["EchoService<br/>prices and serves independently"]
+    end
+
+    subgraph CORE["@strkret/agent-core"]
+        VOU["voucher.ts<br/>sign / verify poseidon(channel, units)<br/>— identical to the Cairo side"]
+        MET["MeteredSession<br/>accumulates what is owed"]
+    end
+
+    subgraph PCL["@strkret/privacy-client"]
+        CLI["createPrivacyClient"]
+        DISC["createPoolContract<br/>→ ContractDiscoveryProvider<br/>(no indexer needed)"]
+        PROV["StarkscanProverProvider<br/>(mainnet proving relay)"]
+    end
+
+    POOL[("STRK20 Privacy Pool<br/>shielded notes, nullifiers,<br/>get_fee_amount()")]
+    ANON["MeteringAnonymizer (Cairo)<br/>verifies voucher + rate commitment,<br/>pays (units − settled) × rate"]
+
+    RES -->|"HTTP + X-STRK20-VOUCHER"| SRV
+    SRV --> ECHO
+    RES -.uses.-> VOU
+    SRV -.uses.-> VOU
+    RUN --> MET
+    RUN -->|"settle"| CLI
+    CLI --> DISC
+    CLI --> PROV
+    DISC -->|"starknet_call, decrypt locally"| POOL
+    CLI -->|"deposit / transfer / withdraw"| POOL
+    POOL -->|"privacy_invoke"| ANON
+    ANON -->|"OpenNoteDeposit x2"| POOL
+
+    classDef chain fill:#2d3748,stroke:#4a5568,color:#fff
+    class POOL,ANON chain
+```
+
+Everything above the pool line is free and off-chain. Only `runSession`'s
+settle step and the one-time `register`/`deposit` cross into the shaded
+boxes, and each crossing pays the flat protocol fee — which is why the
+metering loop deliberately never does.
+
 ```mermaid
 sequenceDiagram
     participant C as Consumer process
@@ -257,16 +307,18 @@ pnpm --filter @strkret/agent-consumer run demo
   [strk20-by-example.org](https://strk20-by-example.org) first. Don't guess
   these; a wrong pool address fails silently in confusing ways. Mainnet pool:
   `0x040337b1af3c663e86e333bab5a4b28da8d4652a15a69beee2b677776ffe812a`.
-- `PROVING_SERVICE_URL` / `INDEXER_URL` — we have working Sepolia values for
-  these (from the STRK20 team directly, not publicly documented — ask in
-  their Telegram, linked from the skill docs, if you need your own). **The
-  same ask for mainnet is still pending** and is the actual blocker on a
-  real mainnet run right now, not the code — both settlement paths already
-  ran successfully on Sepolia with these (see `demo-invoke-sepolia.ts` and
-  its real tx hash in `contracts/metering-anonymizer/README.md`; the plain
-  `transfer()` path via `demo.ts` was verified the same way). Self-hosting
-  the Docker images from `starkware-libs/starknet-privacy` is the fallback
-  if you don't have either.
+- `PROVING_SERVICE_URL` — a hosted prover. We have a working Sepolia one
+  from the STRK20 team (not publicly documented; ask in their Telegram).
+  For **mainnet** there is no JSON-RPC prover, but Starkscan runs a REST
+  relay in front of one — set `starkscanProverApiKey` on the client instead
+  and `provingServiceUrl` becomes the relay base URL. Their API is
+  pilot-phase: 10 proofs/day per key, and it will not serve
+  `deploy_account`.
+- `INDEXER_URL` — **optional.** Left empty, discovery runs off plain
+  `starknet_call`s against the pool and decrypts locally with the viewing
+  key, so no hosted indexer is needed on any network. Verified equivalent to
+  the hosted one on Sepolia, where both exist. Set it only if you have one
+  and want to spare the RPC volume.
 - `CONSUMER_VIEWING_KEY` / `PROVIDER_VIEWING_KEY` — must be a decimal
   `BigInt` string, not hex. A hex string compiles fine but derives the wrong
   channel keys, and notes sent to that account never decrypt.
@@ -277,6 +329,79 @@ pnpm --filter @strkret/agent-consumer run demo
   npm config set @starkware-libs:registry https://npm.pkg.github.com
   npm config set '//npm.pkg.github.com/:_authToken' "$(gh auth token)"
   ```
+
+## Testing on Sepolia
+
+Sepolia is where everything is verified end to end against real infra — real
+pool, real prover, real proofs — without spending mainnet money. Work
+outward: the first two need no network at all, and each step proves
+something the next one assumes.
+
+**1. No network — logic and the payment gate**
+
+```bash
+pnpm -r build
+(cd contracts/metering-anonymizer && snforge test)   # 8 tests
+pnpm --filter @strkret/agent-provider run selfcheck  # gate refuses bad vouchers
+pnpm --filter @strkret/agent-consumer run selfcheck  # consumer refuses to over-sign
+```
+
+The contract suite signs with real starknet.js vectors, so it proves the
+Cairo and TypeScript sides agree on `poseidon(channel_id, total_units)` —
+not merely that the Cairo compiles.
+
+**2. Local devnet — the whole flow, no credentials**
+
+```bash
+asdf install starknet-devnet 0.8.2 && asdf set starknet-devnet 0.8.2
+./scripts/build-devnet-artifacts.sh
+pnpm --filter @strkret/agent-consumer run demo:devnet             # plain transfer
+pnpm --filter @strkret/agent-consumer run demo:invoke-devnet      # anonymizer path
+pnpm --filter @strkret/agent-consumer run demo:networked-devnet   # 402 + vouchers + threshold
+```
+
+The networked one is the interesting demo: two real OS processes, a 402
+handshake, a signed voucher per call, and — with a threshold of 20 against
+30 owed — **two** settlements rather than one.
+
+**3. Sepolia — real infra**
+
+Fill `.env` first (see above; `INDEXER_URL` can stay empty). Both accounts
+need STRK for the deposit and the protocol fee, which is 2 STRK per
+settlement on Sepolia — the code reads that from the pool rather than
+assuming it.
+
+```bash
+pnpm --filter @strkret/agent-consumer run demo                    # plain transfer path
+pnpm --filter @strkret/agent-consumer run demo:invoke-sepolia     # anonymizer, one settlement
+pnpm --filter @strkret/agent-consumer run demo:incremental-sepolia # two settlements, delta only
+pnpm --filter @strkret/agent-consumer run check:discovery         # indexer vs contract discovery
+```
+
+What each is actually evidence of:
+
+| Command | Proves |
+|---|---|
+| `demo` | plain `transfer()` settlement works against the real pool |
+| `demo:invoke-sepolia` | the contract computes and enforces the settlement on-chain |
+| `demo:incremental-sepolia` | a second voucher on one channel pays the **delta**, not the total again |
+| `check:discovery` | contract discovery finds exactly what the hosted indexer does |
+
+`demo:incremental-sepolia` is the one worth reading the output of. It runs
+two rounds on the same channel — cumulative 100 then 150 — and asserts the
+provider is credited `+500` then `+250`, reading the balance back from
+`discoverNotes()` between rounds rather than trusting its own logs. If the
+high-water mark ever regressed, that second number would read `750`.
+
+**Expect it to be slow.** Every settlement waits ~10 blocks for note
+maturity, so a two-round run is 20–30 minutes of mostly waiting. That wait
+is not incidental: skipping it is what surfaces as a baffling "insufficient
+allowance" on a deposit that just approved.
+
+**Reruns:** bump `CHANNEL_ID` in `demo-incremental-sepolia.ts`. The
+high-water mark persists on-chain per `(consumer, channel)`, so a channel
+already settled at 150 will reject a fresh run starting at 100 — correctly,
+that is the replay guard doing its job.
 
 ## Status
 
@@ -295,6 +420,13 @@ pnpm --filter @strkret/agent-consumer run demo
       charges a flat ~6 STRK per `apply_actions` on mainnet, so per-call
       on-chain payment isn't viable; metering stays off-chain, settlement
       batches.
+- [x] Payment gate hardened: consumer pubkey pinning
+      (`ALLOWED_CONSUMER_KEYS`), channel resync after a lost response, and a
+      consumer-side ceiling so a provider can't name a figure and be signed
+      for. Both sides have `selfcheck` scripts covering the refusals
+- [x] Protocol fee read from the pool at runtime rather than hardcoded —
+      Sepolia charges 2 STRK and mainnet 6, so the old constant would have
+      reverted every mainnet call while Sepolia kept passing
 - [x] Two separate OS processes talking over real HTTP for the off-chain
       metering loop (`demo-networked-devnet.ts`), with an x402-shaped
       handshake: an unpaid call gets `402` + `accepts`, and every paid call

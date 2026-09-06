@@ -32,6 +32,13 @@ export class RemoteEchoService implements Service<EchoRequest, EchoResult> {
   /** Cumulative units authorized so far — what each new voucher signs over. */
   #authorizedUnits = 0n;
 
+  /**
+   * Calls this consumer has actually asked for. The ceiling on what it can
+   * ever owe is `#callsAttempted * price`, and that ceiling is computed here
+   * rather than taken from the provider — which is the whole point of it.
+   */
+  #callsAttempted = 0n;
+
   private constructor(
     private readonly baseUrl: string,
     private readonly consumerPrivateKey: string,
@@ -78,14 +85,31 @@ export class RemoteEchoService implements Service<EchoRequest, EchoResult> {
   }
 
   async handle(req: EchoRequest): Promise<EchoResult> {
+    this.#callsAttempted += 1n;
     try {
       return await this.#attempt(req);
     } catch (err) {
       // A served call whose response was lost leaves the provider's claim
       // ahead of ours, and every later voucher is then too low — the channel
-      // wedges. The 402 says what it needs, so adopt that and try once more.
-      // Once only: a second refusal is a real disagreement, not a lost reply.
+      // wedges. The 402 says where to catch up to, so adopt that and try
+      // once more. Once only: a second refusal is a real disagreement, not a
+      // dropped reply.
       if (!(err instanceof VoucherBehindError)) throw err;
+
+      // But never on the provider's word alone. `requiredUnits` arrives from
+      // the counterparty that gets paid, and adopting it unchecked would let
+      // a provider name any figure and have the consumer sign for work it
+      // never received — the same usage inflation the on-chain settlement
+      // check exists to stop. We know how many calls we asked for, so that
+      // is the ceiling, and it is computed here rather than accepted from
+      // over there.
+      const ceiling = this.#callsAttempted * this.price();
+      if (err.requiredUnits > ceiling) {
+        throw new Error(
+          `provider claims ${err.requiredUnits} units owed but only ${this.#callsAttempted} calls were made ` +
+            `(at most ${ceiling}) — refusing to authorize the difference`,
+        );
+      }
       this.#authorizedUnits = err.requiredUnits - this.price();
       return await this.#attempt(req);
     }
