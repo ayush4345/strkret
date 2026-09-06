@@ -91,7 +91,13 @@ async function main() {
         `minSettlementUnits=${service.minSettlementUnits}`,
     );
 
-    const requests: EchoRequest[] = [{ prompt: "weather" }, { prompt: "translate" }, { prompt: "price" }];
+    // Real questions, so a run against a live model shows actual answers
+    // rather than three words being reversed.
+    const requests: EchoRequest[] = [
+      { prompt: "In one sentence, what is a nullifier in a shielded pool?" },
+      { prompt: "Name one reason flat per-transaction fees break micropayments." },
+      { prompt: "What does a payment channel let two parties avoid?" },
+    ];
 
     const result = await runSession(consumerClient, providerClient, service, requests, {
       tokenAddress: testEnv.env.strk,

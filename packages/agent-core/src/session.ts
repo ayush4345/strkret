@@ -213,8 +213,12 @@ export async function runSession<Req, Res>(
   // no chain call per unit; only settlement touches the pool. ---
   const session = new MeteredSession(service);
   for (const req of requests) {
-    const { cost } = await session.call(req);
-    log(`[session] served a call on ${service.name} (cost ${cost})`);
+    const { result, cost } = await session.call(req);
+    const answer = (result as { completion?: string }).completion;
+    log(
+      `[session] ${service.name} served a call (cost ${cost})` +
+        (answer ? `: ${answer.replace(/\s+/g, " ").slice(0, 120)}` : ""),
+    );
     if (opts.settlementThreshold && session.owed - settled >= opts.settlementThreshold) {
       log(`[session] ${session.owed - settled} unsettled >= threshold ${opts.settlementThreshold}`);
       await settle(session.owed - settled);

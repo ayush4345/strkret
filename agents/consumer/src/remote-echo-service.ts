@@ -27,7 +27,13 @@ class VoucherBehindError extends Error {
 }
 
 export class RemoteEchoService implements Service<EchoRequest, EchoResult> {
-  readonly name = "echo";
+  /**
+   * What the provider actually sells, taken from its advertised description
+   * rather than hardcoded — this class proxies whatever is on the other end,
+   * and calling it "echo" when it is selling inference makes the session log
+   * quietly wrong.
+   */
+  readonly name: string;
 
   /** Cumulative units authorized so far — what each new voucher signs over. */
   #authorizedUnits = 0n;
@@ -45,7 +51,9 @@ export class RemoteEchoService implements Service<EchoRequest, EchoResult> {
     private readonly baseUrl: string,
     private readonly consumerPrivateKey: string,
     readonly terms: PaymentRequirements,
-  ) {}
+  ) {
+    this.name = terms.description;
+  }
 
   /**
    * Open a channel by provoking the provider's 402 and reading its terms.
@@ -163,7 +171,13 @@ export class RemoteEchoService implements Service<EchoRequest, EchoResult> {
       if (detail.requiredUnits) throw new VoucherBehindError(BigInt(detail.requiredUnits));
       throw new Error(`provider refused the voucher: ${detail.error ?? "payment required"}`);
     }
-    if (!res.ok) throw new Error(`POST /call failed: ${res.status}`);
+    if (!res.ok) {
+      // Surface what the provider said. A bare status tells you nothing about
+      // whether the service failed, the request was malformed, or the model
+      // refused — and the call may already have cost the consumer.
+      const detail = await res.text().catch(() => "");
+      throw new Error(`POST /call failed: ${res.status}${detail ? ` — ${detail}` : ""}`);
+    }
 
     // Only bank the authorization once the call was actually served, so a
     // failed call does not silently inflate what the consumer owes.

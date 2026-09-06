@@ -59,7 +59,7 @@ export class LlmService implements Service<LlmRequest, LlmResult> {
     // Model is configurable because model availability differs per account —
     // a hardcoded name that the key cannot reach fails at the first paid call,
     // which is the worst possible moment to discover it.
-    this.#model = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
+    this.#model = process.env.OPENAI_MODEL ?? "gpt-5.4-mini";
     this.#provided = client;
   }
 
@@ -92,7 +92,10 @@ export class LlmService implements Service<LlmRequest, LlmResult> {
   async handle(req: LlmRequest): Promise<LlmResult> {
     const response = await this.#openai().chat.completions.create({
       model: this.#model,
-      max_tokens: 1024,
+      // `max_tokens` is rejected by the gpt-5 family — it wants
+      // `max_completion_tokens`. The older name fails at the first paid call
+      // rather than at startup, which is the worst place to find out.
+      max_completion_tokens: 1024,
       messages: [
         {
           role: "system",
