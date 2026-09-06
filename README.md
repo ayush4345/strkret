@@ -296,10 +296,14 @@ pnpm --filter @strkret/agent-consumer run demo
       `packages/privacy-client/src/starkscan-prover.ts` (their API is
       pilot-phase: 10 proofs/day per key, and `deploy_account` isn't
       served by their RPC)
-- [ ] Mainnet indexer/discovery endpoint — Starkscan doesn't offer one;
-      still an open ask with the STRK20 team, and the remaining blocker on
-      a full mainnet deposit → settle run
+- [x] Mainnet discovery — no hosted indexer needed. Discovery runs off
+      plain `starknet_call`s to the pool and decrypts locally against the
+      viewing key, so `indexerUrl` is optional. Verified equivalent to the
+      hosted indexer on Sepolia, where both exist: identical note balances
+      for the same account (`check-contract-discovery.ts`)
 - [ ] Mainnet pool/token addresses confirmed and filled into `.env`
+- [ ] Fund the mainnet consumer account — ~18 STRK for a three-settlement
+      run at 6 STRK each, against 0.32 held
 - [ ] Real run producing the 3 mainnet transaction hashes in `strk20.json`
 - [ ] Live demo URL + demo video
 
