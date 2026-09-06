@@ -7,3 +7,7 @@ dist/
 target/
 .snfoundry_cache/
 test-mainnet-register.ts
+
+# Next.js build output (web/)
+.next/
+next-env.d.ts
