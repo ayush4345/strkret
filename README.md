@@ -194,7 +194,7 @@ sequenceDiagram
     alt plain transfer — amount hidden too
         C->>Pool: transfer(owed since last settlement)
         Pool-->>P: encrypted note credited
-        Note over C,P,Pool: amount, sender, recipient all hidden
+        Note over C,Pool: amount, sender, recipient all hidden
     else anonymizer — correctness enforced on-chain
         C->>Pool: withdraw(escrow) → Anon
         Pool->>Anon: privacy_invoke(voucher, sig, rateCommitment)
@@ -202,7 +202,7 @@ sequenceDiagram
         Anon-->>Pool: OpenNoteDeposit × 2
         Pool-->>P: settlement (amount public)
         Pool-->>C: refund (amount public)
-        Note over Anon,Pool: identities still hidden; mark advances
+        Note over Anon,Pool: identities still hidden — mark advances
     end
 
     Note over C,Pool: repeat settlement per threshold or at close —<br/>each costs the flat 6 STRK fee, so batch it
