@@ -269,6 +269,12 @@ note maturity → settle with one private transfer, all against the real
 Cairo privacy-pool contract, locally. Three infra issues surfaced doing this
 and are worth knowing about if you hit them again after a dependency bump:
 
+- `snforge test` must run **inside** `contracts/metering-anonymizer/`. It is a
+  separate Scarb project pinning Scarb `2.18.0` in its own `.tool-versions`,
+  so running it from the repo root picks up whatever Scarb is global and
+  fails with "Scarb Version X doesn't satisfy minimal 2.13.1". That message
+  reads as "upgrade Scarb", but the right version is already installed — it
+  is just not active in the directory you are standing in.
 - The SDK pins `starknet.js` at `10.5.0`; letting npm resolve a different
   top-level `starknet` version installs two copies with incompatible types.
   Keep `package.json`'s `starknet` version exactly matching whatever
@@ -351,7 +357,7 @@ something the next one assumes.
 
 ```bash
 pnpm -r build
-(cd contracts/metering-anonymizer && snforge test)   # 14 tests
+(cd contracts/metering-anonymizer && snforge test)   # 14 tests — must run inside that dir
 pnpm --filter @strkret/agent-provider run selfcheck  # gate refuses bad vouchers
 pnpm --filter @strkret/agent-consumer run selfcheck  # consumer refuses to over-sign
 ```
