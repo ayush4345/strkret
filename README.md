@@ -125,7 +125,7 @@ flowchart TB
 
     subgraph PP["Provider process"]
         SRV["server.ts — payment gate<br/>402 + accepts, verify signature,<br/>require claim grew ≥ price,<br/>optional pubkey pinning"]
-        ECHO["EchoService<br/>prices and serves independently"]
+        SVC["LlmService — answers prompts, priced per<br/>prompt block; EchoService offline stand-in"]
     end
 
     subgraph CORE["@strkret/agent-core"]
@@ -143,7 +143,7 @@ flowchart TB
     ANON["MeteringAnonymizer (Cairo)<br/>verifies voucher + rate commitment,<br/>pays (units − settled) × rate"]
 
     RES -->|"HTTP + X-STRK20-VOUCHER"| SRV
-    SRV --> ECHO
+    SRV --> SVC
     RES -.uses.-> VOU
     SRV -.uses.-> VOU
     RUN --> MET
@@ -180,7 +180,7 @@ sequenceDiagram
 
     Note over C,P: metering — per call, off-chain, free
     loop N calls
-        C->>C: sign voucher(channelId, cumulative units)
+        C->>C: sign voucher(channelId, cumulative units, rateCommitment)
         C->>P: POST /call + X-STRK20-VOUCHER
         P->>P: verify sig, require claim grew by ≥ price
         P-->>C: { completion, cost, claimedUnits }
@@ -197,10 +197,10 @@ sequenceDiagram
         Note over C,Pool: amount, sender, recipient all hidden
     else anonymizer — correctness enforced on-chain
         C->>Pool: withdraw(escrow) → Anon
-        Pool->>Anon: privacy_invoke(voucher, sig, rateCommitment)
-        Anon->>Anon: check sig + commitment,<br/>pay (units − settled) × rate
+        Pool->>Anon: privacy_invoke(span of claims, one per provider)
+        Anon->>Anon: per claim: check sig over the commitment,<br/>pay (units − settled) × rate
         Anon-->>Pool: OpenNoteDeposit × 2
-        Pool-->>P: settlement (amount public)
+        Pool-->>P: settlement to each provider (amounts public)
         Pool-->>C: refund (amount public)
         Note over Anon,Pool: identities still hidden — mark advances
     end
@@ -229,8 +229,13 @@ A pnpm workspace, TypeScript project references throughout:
   byte-identical to what the Cairo contract verifies. A mismatch there
   wouldn't fail at the HTTP boundary; it would fail on-chain at settlement,
   after the work was already served.
-- **`agents/provider`** (`@strkret/agent-provider`) — owns the concrete
-  `EchoService`, the deterministic demo service, and `server.ts`: runs the
+- **`agents/provider`** (`@strkret/agent-provider`) — what is actually being
+  sold, plus the payment gate in front of it. `LlmService` answers prompts
+  with a real model and prices per block of prompt characters;
+  `EchoService` is the deterministic offline stand-in. The provider picks
+  between them by whether `OPENAI_API_KEY` is set — the fallback is not a
+  courtesy, since the devnet demos and both selfchecks have to run
+  reproducibly without a paid key for anyone cloning this. `server.ts`: runs the
   provider as its own HTTP process with the payment gate in front of it. An
   unpaid `POST /call` gets `402` and the terms; a paid one must carry a
   voucher whose claim has grown by at least this call's price. The provider
@@ -319,6 +324,11 @@ pnpm --filter @strkret/agent-consumer run demo
   key, so no hosted indexer is needed on any network. Verified equivalent to
   the hosted one on Sepolia, where both exist. Set it only if you have one
   and want to spare the RPC volume.
+- `OPENAI_API_KEY` — **optional.** Set it and the provider sells real
+  inference instead of echoing; leave it empty and everything still runs
+  offline. `OPENAI_MODEL` defaults to `gpt-5.4-mini`. Note that the `gpt-5`
+  family rejects `max_tokens` and requires `max_completion_tokens`, which
+  fails at the first paid call rather than at startup.
 - `CONSUMER_VIEWING_KEY` / `PROVIDER_VIEWING_KEY` — must be a decimal
   `BigInt` string, not hex. A hex string compiles fine but derives the wrong
   channel keys, and notes sent to that account never decrypt.
@@ -341,7 +351,7 @@ something the next one assumes.
 
 ```bash
 pnpm -r build
-(cd contracts/metering-anonymizer && snforge test)   # 8 tests
+(cd contracts/metering-anonymizer && snforge test)   # 13 tests
 pnpm --filter @strkret/agent-provider run selfcheck  # gate refuses bad vouchers
 pnpm --filter @strkret/agent-consumer run selfcheck  # consumer refuses to over-sign
 ```
@@ -411,6 +421,9 @@ that is the replay guard doing its job.
 - [x] Verified end-to-end on real Sepolia — both settlement paths: plain
       `transfer()` (`demo.ts`) and the anonymizer contract
       (`demo-invoke-sepolia.ts`)
+- [x] The provider sells real work — an agent answering prompts with a
+      model, priced per request and settled confidentially, rather than a
+      string reverser standing in for one
 - [x] Batched settlement — `privacy_invoke` takes a span of provider claims,
       so a consumer using M provider agents pays them in **one** settlement
       instead of M. At 6 STRK a settlement that is the difference between 6
