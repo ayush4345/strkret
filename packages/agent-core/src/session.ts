@@ -129,6 +129,51 @@ async function approveAndWait(
   await waitForBlocks(client, 10, pollMs, onWaitTick, log, label);
 }
 
+export interface SettleOptions {
+  tokenAddress: string;
+  /** Devnet mines instantly; poll every 1s there instead of 15s against real infra. */
+  maturityPollMs?: number;
+  onWaitTick?: () => Promise<void>;
+  log?: (msg: string) => void;
+}
+
+/**
+ * One private transfer of `amount` from consumer to provider.
+ *
+ * Exported because two callers need it — `runSession` below and the
+ * interactive server in `@strkret/agent-consumer` — and a settlement written
+ * twice is a settlement that can disagree with itself. Amount, sender and
+ * recipient stay inside the pool; only the note's existence is public.
+ *
+ * Waits out note maturity first: a freshly created note cannot be spent for
+ * 10 blocks, and on a second settlement the note in question is the change
+ * the previous one left behind. Skipping the wait surfaces later as a
+ * confusing "insufficient allowance" rather than as a maturity problem.
+ */
+export async function settleOnce(
+  consumer: PrivacyClient,
+  provider: PrivacyClient,
+  amount: bigint,
+  opts: SettleOptions,
+): Promise<string> {
+  const log = opts.log ?? console.log;
+  await waitForBlocks(consumer, 10, opts.maturityPollMs ?? 15_000, opts.onWaitTick, log, "consumer");
+  // Step logs: a settlement is several slow, silent stages (discovery, proof,
+  // submission) and without these a stall is indistinguishable from progress.
+  log("[consumer] maturity reached, resolving proving block");
+  const settleBlockId = await consumer.provingBlockId();
+  log(`[consumer] proving against block ${settleBlockId}, discovering notes + building proof`);
+  const settleBuild = await consumer.transfers
+    .build({ autoSetup: true, autoSelectNotes: "naive", autoDiscover: { notes: "refresh" } })
+    .surplusTo(consumer.account.address)
+    .with(opts.tokenAddress, (t) => t.transfer({ recipient: provider.account.address, amount }))
+    .execute({ provingBlockId: settleBlockId });
+  log("[consumer] proof built, submitting");
+  const settleHash = await consumer.submit(settleBuild.callAndProof);
+  log(`[consumer] settled ${amount} to provider privately: ${settleHash}`);
+  return settleHash;
+}
+
 /**
  * The full metering + settlement flow: register the provider, shield the
  * consumer's deposit, meter a batch of requests against `service` off-chain,
@@ -195,18 +240,15 @@ export async function runSession<Req, Res>(
   let settled = 0n;
   let settlements = 0;
   const settle = async (amount: bigint): Promise<void> => {
-    await waitForBlocks(consumer, 10, pollMs, opts.onWaitTick, log, "consumer");
-    const settleBlockId = await consumer.provingBlockId();
-    const settleBuild = await consumer.transfers
-      .build({ autoSetup: true, autoSelectNotes: "naive", autoDiscover: { notes: "refresh" } })
-      .surplusTo(consumer.account.address)
-      .with(opts.tokenAddress, (t) => t.transfer({ recipient: provider.account.address, amount }))
-      .execute({ provingBlockId: settleBlockId });
-    const settleHash = await consumer.submit(settleBuild.callAndProof);
+    const hash = await settleOnce(consumer, provider, amount, {
+      tokenAddress: opts.tokenAddress,
+      maturityPollMs: pollMs,
+      onWaitTick: opts.onWaitTick,
+      log,
+    });
     settled += amount;
     settlements += 1;
-    log(`[consumer] settled ${amount} to provider privately: ${settleHash}`);
-    txHashes.push(settleHash);
+    txHashes.push(hash);
   };
 
   // --- Meter a session against the provider's service. Off-chain, instant —

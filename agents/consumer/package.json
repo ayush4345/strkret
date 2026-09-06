@@ -18,7 +18,8 @@
     "demo:incremental-sepolia": "tsx src/demo-incremental-sepolia.ts",
     "demo:networked-devnet": "tsx src/demo-networked-devnet.ts",
     "selfcheck": "tsx src/selfcheck.ts",
-    "check:discovery": "tsx src/check-contract-discovery.ts"
+    "check:discovery": "tsx src/check-contract-discovery.ts",
+    "serve": "tsx src/session-server.ts"
   },
   "dependencies": {
     "@starkware-libs/starknet-privacy-sdk": "^0.14.3-rc.5",

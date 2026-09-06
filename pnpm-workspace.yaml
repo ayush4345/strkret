@@ -1,5 +1,6 @@
 packages:
   - "packages/*"
   - "agents/*"
+  - "web"
 allowBuilds:
   esbuild: true
