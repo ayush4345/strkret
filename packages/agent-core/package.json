@@ -19,7 +19,8 @@
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
-    "@strkret/privacy-client": "workspace:*"
+    "@strkret/privacy-client": "workspace:*",
+    "starknet": "10.5.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

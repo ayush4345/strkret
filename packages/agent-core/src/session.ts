@@ -12,6 +12,14 @@ export interface RunSessionOptions {
   depositAmount: bigint;
   /** Devnet mines instantly; poll every 1s there instead of 15s against real infra. */
   maturityPollMs?: number;
+  /**
+   * Settle mid-session once this much value has accrued unsettled, instead
+   * of only at the end. Each settlement is its own `apply_actions` call and
+   * pays the pool's flat protocol fee (6 STRK on mainnet), so a threshold
+   * below roughly ten times that fee spends more on settling than it moves.
+   * Leave unset to settle exactly once, at session close.
+   */
+  settlementThreshold?: bigint;
   log?: (msg: string) => void;
   /**
    * Called on each block-wait poll. Real networks produce blocks on their
@@ -26,6 +34,12 @@ export interface RunSessionResult {
   txHashes: string[];
   owed: bigint;
   calls: number;
+  /**
+   * How many settlement transfers this session made. One unless
+   * `settlementThreshold` triggered mid-session settlements — worth
+   * surfacing, since each one paid the pool's flat protocol fee.
+   */
+  settlements: number;
 }
 
 /**
@@ -124,15 +138,21 @@ export async function runSession<Req, Res>(
   if (providerRegisterTx) txHashes.push(providerRegisterTx);
 
   // --- Deposit: shield tokens into the pool, bundling the consumer's own
-  // registration into the same build if it isn't registered yet. Consumer
-  // makes TWO fee-charged calls (deposit, then settle below) — approve for
-  // both fees up front plus the deposit itself, so settle doesn't need its
-  // own approve-and-wait-10-blocks cycle. ---
+  // registration into the same build if it isn't registered yet. Each
+  // fee-charged call (the deposit, then every settlement) needs its own fee
+  // allowance, approved up front so no settlement has to run its own
+  // approve-and-wait-10-blocks cycle mid-session. With a threshold set there
+  // can be several settlements, so size the allowance for the worst case the
+  // requests could produce rather than the single settlement of the default.
+  const expectedOwed = requests.reduce((sum, req) => sum + service.price(req), 0n);
+  const maxSettlements = opts.settlementThreshold
+    ? expectedOwed / opts.settlementThreshold + 1n
+    : 1n;
   await approveAndWait(
     consumer,
     opts.tokenAddress,
     opts.poolAddress,
-    opts.depositAmount + 2n * FEE_APPROVAL_BUFFER,
+    opts.depositAmount + (1n + maxSettlements) * FEE_APPROVAL_BUFFER,
     pollMs,
     opts.onWaitTick,
     log,
@@ -149,31 +169,44 @@ export async function runSession<Req, Res>(
   log(`[consumer] deposited ${opts.depositAmount} into the pool: ${depositHash}`);
   txHashes.push(depositHash);
 
+  // --- Settle: one private transfer for the given amount. Amount, sender
+  // and recipient stay inside the pool — nothing but the earlier deposit and
+  // this note's existence is public. A freshly created note matures 10
+  // blocks after creation, so wait that out first: on the first settlement
+  // that is the deposit note, and on any later one it is the change note the
+  // previous settlement left behind. ---
+  let settled = 0n;
+  let settlements = 0;
+  const settle = async (amount: bigint): Promise<void> => {
+    await waitForBlocks(consumer, 10, pollMs, opts.onWaitTick, log, "consumer");
+    const settleBlockId = await consumer.provingBlockId();
+    const settleBuild = await consumer.transfers
+      .build({ autoSetup: true, autoSelectNotes: "naive", autoDiscover: { notes: "refresh" } })
+      .surplusTo(consumer.account.address)
+      .with(opts.tokenAddress, (t) => t.transfer({ recipient: provider.account.address, amount }))
+      .execute({ provingBlockId: settleBlockId });
+    const settleHash = await consumer.submit(settleBuild.callAndProof);
+    settled += amount;
+    settlements += 1;
+    log(`[consumer] settled ${amount} to provider privately: ${settleHash}`);
+    txHashes.push(settleHash);
+  };
+
   // --- Meter a session against the provider's service. Off-chain, instant —
-  // no chain call per unit, only the final settlement touches the pool. ---
+  // no chain call per unit; only settlement touches the pool. ---
   const session = new MeteredSession(service);
   for (const req of requests) {
     const { cost } = await session.call(req);
     log(`[session] served a call on ${service.name} (cost ${cost})`);
+    if (opts.settlementThreshold && session.owed - settled >= opts.settlementThreshold) {
+      log(`[session] ${session.owed - settled} unsettled >= threshold ${opts.settlementThreshold}`);
+      await settle(session.owed - settled);
+    }
   }
   log(`[session] ${session.calls} calls served, ${session.owed} owed`);
 
-  // A freshly created note matures 10 blocks after creation — wait it out
-  // before spending the deposit note in the settlement transfer.
-  await waitForBlocks(consumer, 10, pollMs, opts.onWaitTick, log, "consumer");
+  const outstanding = session.owed - settled;
+  if (outstanding > 0n) await settle(outstanding);
 
-  // --- Settle: one private transfer for the exact metered total. Amount,
-  // sender and recipient stay inside the pool — nothing but the earlier
-  // deposit and this note's existence is public. ---
-  const settleBlockId = await consumer.provingBlockId();
-  const settleBuild = await consumer.transfers
-    .build({ autoSetup: true, autoSelectNotes: "naive", autoDiscover: { notes: "refresh" } })
-    .surplusTo(consumer.account.address)
-    .with(opts.tokenAddress, (t) => t.transfer({ recipient: provider.account.address, amount: session.owed }))
-    .execute({ provingBlockId: settleBlockId });
-  const settleHash = await consumer.submit(settleBuild.callAndProof);
-  log(`[consumer] settled ${session.owed} to provider privately: ${settleHash}`);
-  txHashes.push(settleHash);
-
-  return { txHashes, owed: session.owed, calls: session.calls };
+  return { txHashes, owed: session.owed, calls: session.calls, settlements };
 }

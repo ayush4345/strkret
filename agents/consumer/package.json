@@ -14,7 +14,9 @@
     "demo": "tsx src/demo.ts",
     "demo:devnet": "tsx src/demo-devnet.ts",
     "demo:invoke-devnet": "tsx src/demo-invoke-devnet.ts",
-    "demo:invoke-sepolia": "tsx src/demo-invoke-sepolia.ts"
+    "demo:invoke-sepolia": "tsx src/demo-invoke-sepolia.ts",
+    "demo:incremental-sepolia": "tsx src/demo-incremental-sepolia.ts",
+    "demo:networked-devnet": "tsx src/demo-networked-devnet.ts"
   },
   "dependencies": {
     "@starkware-libs/starknet-privacy-sdk": "^0.14.3-rc.5",

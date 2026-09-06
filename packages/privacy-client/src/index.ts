@@ -1,6 +1,16 @@
 import { Account, RpcProvider, constants } from "starknet";
 import { createPrivateTransfers } from "@starkware-libs/starknet-privacy-sdk";
+// ContractDiscoveryProvider is packaged under /testing, but it is a real
+// implementation of DiscoveryProviderInterface, not a mock — it is what the
+// SDK's own devnet environment runs. The /testing subpath is public in the
+// package's exports map; internal/ is not, which is why it comes from here.
+import { ContractDiscoveryProvider } from "@starkware-libs/starknet-privacy-sdk/testing";
+import { createPoolContract } from "./pool-contract.js";
 import type { CallAndProof, PrivateTransfersInterface } from "@starkware-libs/starknet-privacy-sdk";
+import { StarkscanProverProvider } from "./starkscan-prover.js";
+
+export { StarkscanProverProvider } from "./starkscan-prover.js";
+export { createPoolContract } from "./pool-contract.js";
 
 export interface PrivacyClientConfig {
   rpcUrl: string;
@@ -9,7 +19,30 @@ export interface PrivacyClientConfig {
   viewingKey: bigint;
   poolAddress: string;
   provingServiceUrl: string;
-  indexerUrl: string;
+  /**
+   * Hosted discovery service. Optional: when omitted, discovery runs off
+   * plain `starknet_call`s to the pool via {@link createPoolContract},
+   * decrypting locally against the viewing key. That is what makes mainnet
+   * possible at all — no hosted indexer exists for it — and it keeps the
+   * viewing key on this machine rather than handing it to a service.
+   *
+   * Verified equivalent on Sepolia, where both exist: the two paths return
+   * identical note balances for the same account
+   * (`agents/consumer/src/check-contract-discovery.ts`).
+   *
+   * The tradeoff is RPC volume — discovery bisects and scans rather than
+   * issuing one indexed query — so prefer a hosted indexer where one exists
+   * and the endpoint is metered.
+   */
+  indexerUrl?: string;
+  /**
+   * When set, uses Starkscan's STRK20 prover relay
+   * (https://starkscan.co/docs/api/strk20-prover) instead of the SDK's
+   * default JSON-RPC proving client. `provingServiceUrl` is then read as
+   * the relay's base URL (e.g. https://api.starkscan.co/v1/SN_MAIN),
+   * not a JSON-RPC prover URL. Mainnet only — there is no Sepolia relay.
+   */
+  starkscanProverApiKey?: string;
 }
 
 export interface PrivacyClient {
@@ -74,11 +107,19 @@ export async function createPrivacyClient(config: PrivacyClientConfig): Promise<
     cairoVersion: "1",
   });
 
+  const provingProvider = config.starkscanProverApiKey
+    ? new StarkscanProverProvider(config.provingServiceUrl, config.starkscanProverApiKey, chainId, provider, config.poolAddress)
+    : { url: config.provingServiceUrl, chainId };
+
+  const discoveryProvider = config.indexerUrl
+    ? { url: config.indexerUrl }
+    : new ContractDiscoveryProvider(createPoolContract(config.poolAddress, provider));
+
   const transfers = createPrivateTransfers({
     account,
     viewingKeyProvider: { getViewingKey: async () => config.viewingKey },
-    provingProvider: { url: config.provingServiceUrl, chainId },
-    discoveryProvider: { url: config.indexerUrl },
+    provingProvider,
+    discoveryProvider,
     poolContractAddress: config.poolAddress,
   });
 

@@ -16,13 +16,17 @@
   ],
   "scripts": {
     "build": "tsc -b",
-    "clean": "rm -rf dist *.tsbuildinfo"
+    "clean": "rm -rf dist *.tsbuildinfo",
+    "serve": "tsx src/server.ts",
+    "selfcheck": "tsx src/selfcheck.ts"
   },
   "dependencies": {
-    "@strkret/agent-core": "workspace:*"
+    "@strkret/agent-core": "workspace:*",
+    "starknet": "10.5.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "tsx": "^4.19.0",
     "typescript": "^5.6.0"
   }
 }

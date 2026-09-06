@@ -12,6 +12,17 @@ const CHANNEL_ID: felt252 = 1;
 const TOTAL_UNITS: u128 = 100;
 const SIG_R: felt252 = 0x4a2160061438583b5b5724a348dff7b051fbf30f0d75c355eff59f3c552dbf8;
 const SIG_S: felt252 = 0x4d0621ee782b395424644c4c9bd3699d8768f2a8ecf5a893adf5243eced5c68;
+// A second, strictly newer voucher on the SAME channel — sign(poseidon(
+// channel_id=1, total_units=150)) for the same private_key = 0x1. Same
+// provenance as the vector above, generated with starknet.js.
+const TOTAL_UNITS_2: u128 = 150;
+const SIG_R_2: felt252 = 0x25b656a42c7f6aba56c1b6d7c7fcd94c7c577d467ddafb0366f0d57793838fb;
+const SIG_S_2: felt252 = 0x225881f71ca449d50ea4581edf610a1a6b0aed3f5b06d83d7f8524415c24fa2;
+// A DIFFERENT consumer (private_key = 0x2) signing the SAME channel_id and
+// unit count, for the channel-isolation test below.
+const CONSUMER_2_PUBKEY: felt252 = 0x759ca09377679ecd535a81e83039658bf40959283187c654c5416f439403cf5;
+const CONSUMER_2_SIG_R: felt252 = 0x2344631a1ab32e3255c7caab894fac415c46adaae2c847b714182c78f206bf;
+const CONSUMER_2_SIG_S: felt252 = 0x5d9b9f4f4e7af76c2d447ccb8bec747c2f584f81ddf2463612ab7bb8837e54f;
 const RATE: u128 = 5;
 const RATE_BLIND: felt252 = 42;
 const RATE_COMMITMENT: felt252 = 0x6543d1c88b2dbfa68234938d4b8fb03ade9966495f58a3db6eca8f47583e0a8;
@@ -119,6 +130,87 @@ fn rejects_replayed_voucher() {
         .privacy_invoke(
             token, RATE, RATE_BLIND, RATE_COMMITMENT, CHANNEL_ID, TOTAL_UNITS,
             CONSUMER_PUBKEY, SIG_R, SIG_S, PROVIDER_NOTE_ID, REFUND_NOTE_ID,
+        );
+    dispatcher
+        .privacy_invoke(
+            token, RATE, RATE_BLIND, RATE_COMMITMENT, CHANNEL_ID, TOTAL_UNITS,
+            CONSUMER_PUBKEY, SIG_R, SIG_S, PROVIDER_NOTE_ID, REFUND_NOTE_ID,
+        );
+}
+
+/// Incremental vouchers: settling a newer voucher on a channel pays only
+/// the units beyond the high-water mark, never the cumulative total again.
+/// This is what lets a provider hold a running claim off-chain and settle
+/// periodically without double-charging for units already paid.
+#[test]
+fn settles_only_the_delta_on_a_newer_voucher() {
+    let anonymizer = deploy_anonymizer();
+    let token = deploy_mock_erc20(anonymizer, ESCROW_AMOUNT * 2);
+    start_cheat_caller_address(anonymizer, 0x999.try_into().unwrap());
+    let dispatcher = IMeteringAnonymizerDispatcher { contract_address: anonymizer };
+
+    let first = dispatcher
+        .privacy_invoke(
+            token, RATE, RATE_BLIND, RATE_COMMITMENT, CHANNEL_ID, TOTAL_UNITS,
+            CONSUMER_PUBKEY, SIG_R, SIG_S, PROVIDER_NOTE_ID, REFUND_NOTE_ID,
+        );
+    assert(*first.at(0).amount == EXPECTED_SETTLEMENT, 'wrong first settlement');
+
+    // 150 cumulative units against a mark of 100 — only the 50 new units
+    // are payable, so 250, not the 750 a cumulative reading would give.
+    let second = dispatcher
+        .privacy_invoke(
+            token, RATE, RATE_BLIND, RATE_COMMITMENT, CHANNEL_ID, TOTAL_UNITS_2,
+            CONSUMER_PUBKEY, SIG_R_2, SIG_S_2, PROVIDER_NOTE_ID, REFUND_NOTE_ID,
+        );
+    assert(*second.at(0).amount == (TOTAL_UNITS_2 - TOTAL_UNITS) * RATE, 'wrong delta settlement');
+}
+
+/// `channel_id` is caller-chosen and carries no identity, so two consumers
+/// can pick the same one. Their high-water marks must stay independent —
+/// otherwise the first to settle would cap or block the second, who never
+/// agreed to share a channel with them.
+#[test]
+fn channels_are_isolated_per_consumer() {
+    let anonymizer = deploy_anonymizer();
+    let token = deploy_mock_erc20(anonymizer, ESCROW_AMOUNT * 2);
+    start_cheat_caller_address(anonymizer, 0x999.try_into().unwrap());
+    let dispatcher = IMeteringAnonymizerDispatcher { contract_address: anonymizer };
+
+    // Consumer 1 settles 100 units on channel 1, taking that mark to 100.
+    dispatcher
+        .privacy_invoke(
+            token, RATE, RATE_BLIND, RATE_COMMITMENT, CHANNEL_ID, TOTAL_UNITS,
+            CONSUMER_PUBKEY, SIG_R, SIG_S, PROVIDER_NOTE_ID, REFUND_NOTE_ID,
+        );
+
+    // Consumer 2's first voucher on the same channel id is also 100 units.
+    // Keyed on channel_id alone this would be rejected as stale; keyed on
+    // (pubkey, channel_id) it settles in full.
+    let second = dispatcher
+        .privacy_invoke(
+            token, RATE, RATE_BLIND, RATE_COMMITMENT, CHANNEL_ID, TOTAL_UNITS,
+            CONSUMER_2_PUBKEY, CONSUMER_2_SIG_R, CONSUMER_2_SIG_S,
+            PROVIDER_NOTE_ID, REFUND_NOTE_ID,
+        );
+    assert(*second.at(0).amount == EXPECTED_SETTLEMENT, 'consumer 2 was not isolated');
+}
+
+/// The attack incremental vouchers open up that a plain used-voucher set
+/// would miss: after settling at 150, the older-but-still-validly-signed
+/// 100-unit voucher must not be settleable against a fresh escrow.
+#[test]
+#[should_panic(expected: 'VOUCHER_ALREADY_USED')]
+fn rejects_stale_voucher_after_a_newer_one_settled() {
+    let anonymizer = deploy_anonymizer();
+    let token = deploy_mock_erc20(anonymizer, ESCROW_AMOUNT * 2);
+    start_cheat_caller_address(anonymizer, 0x999.try_into().unwrap());
+    let dispatcher = IMeteringAnonymizerDispatcher { contract_address: anonymizer };
+
+    dispatcher
+        .privacy_invoke(
+            token, RATE, RATE_BLIND, RATE_COMMITMENT, CHANNEL_ID, TOTAL_UNITS_2,
+            CONSUMER_PUBKEY, SIG_R_2, SIG_S_2, PROVIDER_NOTE_ID, REFUND_NOTE_ID,
         );
     dispatcher
         .privacy_invoke(
