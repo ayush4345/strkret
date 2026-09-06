@@ -5,9 +5,10 @@ privately on Starknet via [STRK20](https://strk20.starknet.io).
 
 A consumer agent buys metered calls from a provider agent — priced and served
 independently by the provider — and pays for exactly what it used through the
-STRK20 privacy pool. The amount, the sender, and the recipient never appear
-on-chain: only the pool's shielded notes do. Confidentiality is the pool's
-job; this project is the metering and settlement logic sitting on top of it.
+STRK20 privacy pool. Metering happens per call and off-chain; settlement is
+batched and shielded. Confidentiality is the pool's job; this project is the
+metering and settlement logic on top of it, and the reason those two are
+deliberately separated is the first thing worth explaining.
 
 ## The problem: pay-per-use and confidentiality pull against each other
 
@@ -63,16 +64,26 @@ its terms for exactly this reason — below it, settling costs more than the
 work is worth, and the consumer should know that before it starts spending
 rather than discover it at settlement.
 
-## Why a private transfer, not a private *proof*
+## Why no bespoke ZK circuit
 
-The obvious design is a custom circuit that proves "settlement = usage ×
-rate" without revealing usage or rate. STRK20 already solves the harder half
-of that problem generically — every private transfer through its pool hides
-sender, recipient, token, and amount behind a native STARK proof. So the
-metering layer here doesn't need cryptography of its own: the provider prices
-each call, accumulates what's owed over a session, and the consumer settles
-the total with one ordinary-looking `transfer()` call into the pool. The
-confidentiality guarantee comes from STRK20, not from a bespoke circuit.
+The obvious design is a custom circuit proving "settlement = usage × rate"
+without revealing usage or rate. STRK20 already solves the harder half of
+that generically — every private transfer through its pool hides sender,
+recipient, token and amount behind a native STARK proof. Rebuilding that
+would be reimplementing the pool badly.
+
+So the confidentiality guarantee is STRK20's, not ours. What this project
+adds is the cheap half: **STARK-curve signatures and a Poseidon rate
+commitment**, which is ordinary applied cryptography rather than a circuit.
+A voucher costs nothing to sign or verify, which is exactly why metering can
+happen on every call while proving stays where it belongs — inside the
+pool's own settlement, once per batch.
+
+Worth being precise, since these are easy to conflate: the *shielding* is
+zero-knowledge and comes from the pool. The *metering integrity* is
+signatures and commitments, and is not zero-knowledge — a voucher reveals
+the unit count to whoever holds it, which is only ever the two parties to
+the channel.
 
 ## Anonymizer contract: `settlement` public, correctness enforced
 
@@ -83,7 +94,8 @@ package's README for the review still needed before mainnet). It's an
 alternative settlement path to
 the plain `transfer()` above, not a replacement: it verifies the consumer's
 signed usage voucher and the `rate_commitment` on-chain, computes
-`settlement = total_units × rate` itself, and splits the escrowed deposit
+`settlement = (total_units − already_settled) × rate` itself — paying only
+what this channel hasn't already settled — and splits the escrowed deposit
 into `settlement -> provider` and `refund -> consumer` in one atomic call —
 so the settlement amount is enforced on-chain rather than trusted, which a
 bare `transfer()` doesn't give you.
