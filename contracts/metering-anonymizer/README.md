@@ -5,41 +5,45 @@
 A STRK20 anonymizer (`privacy_invoke`) contract that verifies a
 consumer-signed usage voucher on-chain and splits an escrowed deposit into
 `settlement -> provider` and `refund -> consumer` in one atomic private
-transaction — restoring the "settlement amount is provably correct"
-guarantee that a plain STRK20 `transfer()` doesn't give you, at the cost of
-making the settlement amount (not the rate, not the unit count, not either
-party's identity) public. See the root README's "Anonymizer contract:
-settlement public, correctness enforced" section for the full reasoning.
+transaction. It checks signed units and rate arithmetic. Settlement amounts,
+token, rate, rate blind, unit count, channel, consumer public key and signature
+are public in the submitted calldata and output. Open-note owners are
+concealed, but the transaction sender and reused signing keys can identify or
+link activity. See the root README's privacy comparison.
 
 ## Batched settlement
 
 `privacy_invoke` takes a **span of claims**, one per provider being paid out
 of the escrow, and returns one deposit per claim in claim order plus a
-trailing refund. Each claim carries its own voucher, rate commitment and
-signature, so one consumer's signature can never authorize a payout to a
-provider it did not agree with.
+trailing refund only if a remainder exists. Each claim carries its own
+voucher, rate commitment and signature. The signature does not bind the
+provider note, refund note, token or deployment: the caller selects those,
+so signature verification alone does not authorize recipient routing.
 
 This is the point of the contract's shape, not a convenience. The pool
-charges a flat protocol fee per settlement (6 STRK on mainnet), so a consumer
-that used ten provider agents pays 60 STRK settling them one at a time and 6
+charged a flat protocol fee per settlement (6 STRK in the recorded mainnet
+run), so at that fee a consumer using ten providers pays 60 STRK settling
+them one at a time and 6
 settling them together. The per-counterparty overhead falls as the batch
-grows, which is the only lever that exists — the fee itself is fixed.
+grows. Execution gas can still increase with the number of claims; read the
+current pool fee before submitting.
 
 Two things follow from batching that per-claim checks would miss, and both
 are tested:
 
 - **The escrow cap is checked against the batch total.** Claims that each fit
   individually can still exceed the escrow together.
-- **A channel listed twice in one batch cannot be paid twice.** The
+- **The same cumulative voucher cannot be paid twice in one batch.** The
   high-water mark is written inside the loop, so the second entry sees the
   first as already settled and is rejected for not being strictly newer.
+  A second, higher cumulative voucher for that channel pays only its delta.
 
 ## What it checks
 
 Per claim in the batch:
 
 1. `rate_commitment == poseidon(rate, rate_blind)` — the settlement uses the
-   same rate committed to at channel-open, without revealing it.
+   same rate committed to at channel-open. Both witnesses are public calldata.
 2. The consumer's own STARK-curve signature over
    `poseidon(channel_id, total_units, rate_commitment)` — proof the consumer,
    not the provider, authorized paying for exactly `total_units` **at the
@@ -67,14 +71,14 @@ Per claim in the batch:
 `total_units` is **cumulative for the channel**, not per-settlement. That is
 what lets vouchers be incremental: the consumer signs a fresh voucher for
 the running total as metering proceeds, each superseding the last, so the
-provider holds an enforceable claim for everything served so far without a
-single chain interaction. Settlement then pays only the units beyond what
-that channel has already settled.
+provider can verify the signed usage without a chain interaction. It still
+needs funded settlement to be submitted: the voucher does not lock or debit
+consumer funds. Settlement pays only units beyond the channel's prior mark.
 
 This is what makes the economics work at all. The pool charges a flat
-protocol fee per `apply_actions` call (6 STRK on mainnet, read live from
-`get_fee_amount()`), so settling per API call is not viable at any sane
-per-call price. Metering stays off-chain and per-call; only settlement
+protocol fee per `apply_actions` call (6 STRK in the recorded mainnet run),
+which overwhelms the demo's tiny per-call price. Metering stays off-chain;
+only settlement
 touches the chain, and it can then be batched or threshold-triggered.
 
 The guard is a per-channel **high-water mark** rather than a set of spent
@@ -94,8 +98,6 @@ value share a mark — the first to settle would cap or block the second,
 who never agreed to share a channel. Binding it to the pubkey the
 signature was just verified against isolates each consumer's channels to
 that consumer.
-
-## Security review needed before any deploy
 
 ## Review status
 
@@ -131,20 +133,20 @@ that consumer.
   residue only exists if the pool under-pulls. Resetting afterwards is
   impossible — the pull happens after this function returns.
 
-**Still worth an independent look.** A caller can still name a token the
-contract does not actually hold escrow in; the deposits then reference that
-token while the real escrow stays behind. That harms only the caller who
-built such a transaction, but it does break the "never holds funds across
-transactions" property this contract otherwise maintains.
+**Remaining limitations.** The entry point is permissionless and the caller
+chooses the token and output note IDs. The signed message does not bind those
+fields or the chain/deployment. The high-water mark also omits token and rate
+commitment. These are trust and replay-domain limitations, not guarantees
+covered by the 14 tests; the contract is not a complete payment channel.
+
 - **The signature check is the highest-risk part.** A bug here lets anyone
   who can see a voucher (which the provider legitimately does, as part of
   normal metering) forge a settlement claim. Independently verify
   `check_ecdsa_signature` is being called with the right message hash and
   that there's no way to satisfy it without the consumer's real private key.
-- Confirm calldata to `privacy_invoke` isn't itself published on-chain in a
-  way that would leak `rate`/`rate_blind` even though they never appear in
-  a public signal — this wasn't independently verified before writing this
-  contract.
+- The recorded mainnet settlement publishes the claim's rate, blind, unit
+  count, channel, public key and signature in transaction calldata. A rate
+  commitment does not hide its witnesses once they are submitted there.
 - The high-water mark is keyed by `poseidon(consumer_pubkey, channel_id)`,
   not `channel_id` alone, so two consumers picking the same caller-chosen
   `channel_id` don't share a mark and can't cap or block each other.
@@ -202,19 +204,22 @@ That also explains why the **devnet** demo needs the manual
 `set_open_note_screening_policy(..., Exempt)` call: devnet has no real FPI
 to call, so nothing would pass screening there without it — that workaround
 is for the test environment's sake, not evidence production needs the same
-manual step. Still worth confirming this holds for whatever prover mainnet
-ends up using, since "the hosted prover handles it" is a property of that
-specific prover, not of the contract.
+manual step. The recorded mainnet run used the Starkscan prover relay and
+succeeded; that does not guarantee every prover configuration supplies the
+required attestations.
 
 ## Mainnet
 
-Declared and deployed on Starknet mainnet. **Not yet invoked** — no settlement
-has run against this instance.
+Declared, deployed, and invoked on Starknet mainnet. The settlement in
+[`strk20.json`](../../strk20.json) succeeded and credited 12 wei and 988 wei
+to the provider and refund open notes respectively from 1000 wei of escrow.
+Its receipt and public claim calldata were rechecked on 2026-09-08.
 
 - Class hash: `0x1c539d0bcb4a7fc16cb0d6bae06ec451fa7058c06c352d73cdd8014b1cc9d8f`
 - Contract address: `0x050d3089d17b8552460a9e4b36f5ed95d991493f5f3efaf66d79769cd1840428`
 - Declare tx: `0x664f9e8d7b4b26d3a85724bed5316747009f1aa4694307c15f24dfd4df51c9b`
 - Deploy tx: `0x0715f3332988e540c5f4bd8b9041aa9155c922064c6df79cb561e89b197b3546`
+- [Settlement tx](https://voyager.online/tx/0x23e848a8a12f2509fa056b8f2d6ea595af2177bcd9cd564012c117ac75b5f6c): 12 usage units at 1 wei per unit; gas 2.54768365902817728 STRK plus 6 STRK pool fee.
 - Cost: 4.53 STRK, almost all of it the declare — the class is 75.9 KB of
   Sierra and posting it is what you pay for. Deploying an instance of an
   already-declared class is cheap.
@@ -225,11 +230,13 @@ amounts — worth weighing before it moves value that matters.
 
 ### Submitting mainnet transactions
 
-Three RPC obstacles, recorded because each cost an attempt:
+Historical RPC observations from the deployment attempts:
 
 - **Starkscan's RPC cannot submit declares or account deployments.** Both
-  return `method_not_supported_in_pilot`. It is fine for reads, simulation
-  and invokes.
+  returned `method_not_supported_in_pilot`. The recorded privacy invokes used
+  `https://mainnet.nodes.starknet.org/rpc/v0_10` for submission and Starkscan's
+  separate REST service for proving; do not assume the proving relay's RPC
+  accepts transaction submissions.
 - **Lava rejects sncast's `pre_confirmed` block tag** even on its `/rpc/v0_10`
   path, which reports spec 0.10.2 — it still implements the older `pending`.
   The failure surfaces as `Invalid block id`, which does not point at the

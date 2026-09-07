@@ -312,7 +312,7 @@ export default function Page() {
             <h1>EVERY CALL COUNTS.<br /><span>ONE PRIVATE PAYMENT.</span></h1>
             <p className="hero__description">
               Put your agents to work. Meter every request off-chain, then settle the total
-              through STRK20 on Starknet: {IS_MAINNET ? "one private transfer." : "one sponsored contract settlement on Sepolia."}
+              through STRK20 on Starknet: one contract-enforced settlement, funded by you.
             </p>
             <div className="hero__actions">
               <a className="btn" href="#console">Launch console <span aria-hidden="true">↗</span></a>
@@ -475,7 +475,7 @@ export default function Page() {
                   </dl>
                   <p className="fine-print">Usage units per started {terms?.pricing?.charsPerBlock ?? 100}-character block: {terms?.pricing?.unitsPerBlock ?? "1"}. Pool fees are separate.</p>
                 </section>
-                <p className="sidebar-note"><span aria-hidden="true">↳</span> {IS_MAINNET ? "Pool fees apply to shielding and settlement. Your wallet shows the current cost before you confirm." : "Your wallet shows the shielding fee. The relayer sponsors settlement from its own testnet funds."}</p>
+                <p className="sidebar-note"><span aria-hidden="true">↳</span> Pool fees apply to shielding and settlement. Your wallet shows the current cost before you confirm.</p>
               </aside>
             </div>
           </div>
@@ -484,7 +484,7 @@ export default function Page() {
         <section className="how-section wrap" id="how-it-works">
           <div className="section-heading"><div><p className="eyebrow">02 / The protocol</p><h2>Meter per call. Settle per batch.</h2></div><span className="section-caption">Less on-chain. More done.</span></div>
           <figure className="flow-diagram" aria-labelledby="flow-caption">
-            <figcaption id="flow-caption"><span>Visitor console flow</span><span>{IS_MAINNET ? "Mainnet · wallet payment" : "Sepolia · sponsored settlement"}</span></figcaption>
+            <figcaption id="flow-caption"><span>Visitor console flow</span><span>You fund every step</span></figcaption>
             <ol className="flow-stages">
               <li>
                 <div className="flow-stage-heading"><h3><span>01 /</span> Shield once</h3><span className="flow-badge">Public deposit · pool fee</span></div>
@@ -504,47 +504,38 @@ export default function Page() {
                 <p className="flow-note">The signed total grows with each request. No payment transaction happens here.</p>
               </li>
               <li>
-                <div className="flow-stage-heading"><h3><span>03 /</span> Settle the total</h3><span className="flow-badge">{IS_MAINNET ? "Private transfer · pool fee" : "Relayed to the contract · pool fee"}</span></div>
-                {IS_MAINNET ? (
-                  <div className="flow-route flow-route--three">
-                    <div className="flow-node"><span className="flow-node-label">You approve</span><h4>Your wallet</h4><p>Authorize the accrued amount.</p></div>
-                    <div className="flow-connector"><span>Private transfer</span><i aria-hidden="true">→</i></div>
-                    <div className="flow-node flow-node--pool"><span className="flow-node-label">On-chain</span><h4>STRK20 pool</h4><p>Move shielded funds directly.</p></div>
-                    <div className="flow-connector"><span>Credited privately</span><i aria-hidden="true">→</i></div>
-                    <div className="flow-node"><span className="flow-node-label">Recipient</span><h4>Provider balance</h4><p>Receive the total inside the pool.</p></div>
-                  </div>
-                ) : (
-                  <div className="flow-route flow-route--three">
-                    <div className="flow-node"><span className="flow-node-label">In your browser</span><h4>Session key</h4><p>Sign the cumulative usage total. No wallet approval at this step.</p></div>
-                    <div className="flow-connector"><span>Signed voucher</span><i aria-hidden="true">→</i></div>
-                    <div className="flow-node flow-node--pool"><span className="flow-node-label">Our backend · via STRK20</span><h4>Relayer</h4><p>Verify the voucher. Fund escrow and the fee from the relayer’s reserve, then submit the contract call.</p></div>
-                    <div className="flow-connector"><span>On-chain enforcement</span><i aria-hidden="true">→</i></div>
-                    <div className="flow-node"><span className="flow-node-label">MeteringAnonymizer</span><h4>Payout + remainder</h4><p>Credit the provider for unsettled usage × rate. Credit the escrow remainder to your wallet.</p></div>
-                  </div>
-                )}
+                <div className="flow-stage-heading"><h3><span>03 /</span> Settle the total</h3><span className="flow-badge">Withdraw funds it · pool fee</span></div>
+                <div className="flow-route flow-route--three">
+                  <div className="flow-node"><span className="flow-node-label">You approve</span><h4>Your wallet</h4><p>Withdraw the owed amount plus a fee buffer to the relayer's address.</p></div>
+                  <div className="flow-connector"><span>Funds the relayer</span><i aria-hidden="true">→</i></div>
+                  <div className="flow-node flow-node--pool"><span className="flow-node-label">Our backend · via STRK20</span><h4>Relayer</h4><p>Verify your signed voucher, then call the anonymizer with what you just funded — not its own reserve.</p></div>
+                  <div className="flow-connector"><span>On-chain enforcement</span><i aria-hidden="true">→</i></div>
+                  <div className="flow-node"><span className="flow-node-label">MeteringAnonymizer</span><h4>Payout + remainder</h4><p>Pays the provider unsettled usage × rate. Credits the remainder back to your wallet.</p></div>
+                </div>
                 <p className="flow-note">
-                  {IS_MAINNET
-                    ? "Unused funds stay in your private balance. This console relies on you choosing to pay."
-                    : "Sponsored with testnet STRK: your deposit is not spent or refunded by this step. Both credits come from the relayer’s escrow; open-note token and amounts are public."}
+                  Ready can relay its own basic actions (shield, withdraw) but not a private
+                  transaction invoking a third-party contract — so a relayer submits the real
+                  settlement, funded by the withdraw above rather than its own money. Open-note
+                  token and amounts are public on this path; identities stay hidden.
                 </p>
               </li>
             </ol>
           </figure>
           <details className="contract-flow">
-            <summary><span>{IS_MAINNET ? "Explore the recorded anonymizer path" : "Inside the anonymizer, step by step"}</span><span className="contract-flow__toggle" aria-hidden="true">+</span></summary>
+            <summary><span>Inside the anonymizer, step by step</span><span className="contract-flow__toggle" aria-hidden="true">+</span></summary>
             <div className="contract-flow__body">
-              <p>{IS_MAINNET ? "The recorded SDK demo funds escrow and checks the signed usage and rate on-chain. This mainnet console uses a plain private transfer; its voucher does not enforce payment from your wallet." : "Inside stage 03: the relayer submits your signed voucher with its own escrow. The contract checks the signature and agreed rate, then returns credits to the pool."}</p>
+              <p>Stage 03 above, expanded: the relayer submits your signed voucher with escrow funded by the withdraw you just approved. The contract checks the signature and agreed rate on-chain, then returns credits to the pool.</p>
               <div className="flow-route flow-route--three">
-                <div className="flow-node"><span className="flow-node-label">Inputs</span><h4>Voucher + escrow</h4><p>{IS_MAINNET ? "Signed usage and consumer-funded escrow in the recorded SDK run." : "Signed usage and relayer-funded escrow on Sepolia."}</p></div>
+                <div className="flow-node"><span className="flow-node-label">Inputs</span><h4>Voucher + escrow</h4><p>Your signed usage total, and escrow funded by your own withdraw.</p></div>
                 <div className="flow-connector"><span>Pool releases escrow</span><i aria-hidden="true">→</i></div>
                 <div className="flow-node flow-node--pool"><span className="flow-node-label">MeteringAnonymizer</span><h4>Check and settle</h4><p>Verify signature and rate. Pay only the unsettled delta.</p></div>
                 <div className="flow-connector"><span>Open-note credits</span><i aria-hidden="true">→</i></div>
-                <div className="flow-node"><span className="flow-node-label">Back in the pool</span><h4>{IS_MAINNET ? "Payout + refund" : "Payout + remainder"}</h4><p>{IS_MAINNET ? "Provider receives payment; consumer receives unused escrow." : "Provider receives payment; your wallet receives the relayer’s remaining escrow."}</p></div>
+                <div className="flow-node"><span className="flow-node-label">Back in the pool</span><h4>Payout + remainder</h4><p>Provider receives payment; your wallet receives what's left of the escrow.</p></div>
               </div>
               <p className="flow-note">Open-note token and amount are public in this contract path. <a href="https://github.com/ayush4345/strkret#what-the-mainnet-run-cost" target="_blank" rel="noreferrer">See the recorded mainnet run ↗</a></p>
             </div>
           </details>
-          <div className="disclosure"><span className="eyebrow">Know what stays private</span><p>Deposits and transaction timing are public. The provider sees your prompts and vouchers. {IS_MAINNET ? "Plain private transfers hide their amount and parties on-chain; contract open-note amounts are public." : "The relayer sees your voucher and wallet address. Contract open-note token and amounts are public; note owners are hidden."} Neither path hides your conversation from the provider.</p></div>
+          <div className="disclosure"><span className="eyebrow">Know what stays private</span><p>Deposits and withdraws are public, including your address and amount. The provider sees your prompts and vouchers directly. The relayer sees your voucher and wallet address. Contract open-note token and amounts are public; note owners are hidden. Nothing here hides your conversation from the provider.</p></div>
         </section>
       </main>
       <footer className="wrap site-footer"><a className="wordmark" href="#">strkret<span className="wordmark__dot">.</span></a><span>Confidential commerce for autonomous agents.</span><a className="text-link" href="https://github.com/ayush4345/strkret" target="_blank" rel="noreferrer">Open source ↗</a></footer>
