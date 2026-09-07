@@ -459,17 +459,17 @@ pnpm --filter @strkret/agent-provider run build
 pnpm --filter @strkret/web run dev   # http://localhost:3100
 ```
 
-Connect Ready, shield demo funds, and ask a few questions. Each answer accrues
-a signed usage claim without a chain transaction. After the deposit confirms
-and its notes mature (about 10 blocks), **Settle now** requests one private
-transfer for the accrued amount. Shielding and settlement each incur a pool
-fee; your wallet shows current charges. Unused funds remain shielded.
-
-The visitor console relies on voluntary payment: its ephemeral voucher key
-does not bind your wallet to an on-chain claim. The recorded mainnet run
-separately demonstrates the anonymizer's on-chain rate and signature checks.
-The console runs its provider through Next.js API routes; it does not need
-the devnet session server.
+Connect Ready, shield funds, and ask a few questions. Each answer accrues a
+signed usage claim without a chain transaction. **Settle now** is three
+steps behind one button: your wallet withdraws the owed amount plus a fee
+buffer to a relayer's own address (Ready can relay its own native actions,
+just not a private transaction invoking a third-party contract itself), the
+page waits out note maturity, then the relayer submits the real
+`privacy_invoke` settlement — paid from what you just funded, not out of the
+relayer's own pocket. The anonymizer's on-chain rate and signature checks
+run for real here, the same mechanism the recorded mainnet run demonstrates,
+not a separate path. The console runs its provider through Next.js API
+routes; it does not need the devnet session server.
 
 See [`web/README.md`](web/README.md) for Docker deployment and verification.
 
