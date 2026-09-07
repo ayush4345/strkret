@@ -1,46 +1,81 @@
 # @strkret/web
 
-A browser console for a live metered session — for presenting the flow rather
-than reading a script's output.
+A mainnet visitor console: connect a privacy-enabled Starknet wallet, shield
+funds, buy metered inference, and pay the accrued amount in one private transfer.
 
-## Running it
+## Run locally
 
-Two processes, in this order:
+After installing the workspace dependencies, set `OPENAI_API_KEY` in the
+repo-root `.env`. `OPENAI_MODEL` is optional. The console requires a working
+inference key; it does not fall back to an echo service.
 
 ```bash
-# 1. the session server: boots a devnet, spawns the provider, opens the
-#    channel and deposits escrow (~30s)
-pnpm --filter @strkret/agent-consumer run serve
-
-# 2. the UI
-pnpm --filter @strkret/web run dev     # http://localhost:3100
+pnpm --filter @strkret/agent-core run build
+pnpm --filter @strkret/agent-provider run build
+pnpm --filter @strkret/web run dev
 ```
 
-Set `OPENAI_API_KEY` in the repo-root `.env` and the provider answers with a
-real model; leave it empty and it echoes. Everything else is identical.
+Open http://localhost:3100. Next.js serves both the UI and the provider's API
+routes; the standalone devnet session server is not needed.
 
-## Why devnet
+## Wallet flow
 
-Devnet is the real privacy-pool contract with real proofs, but it mines on
-demand. On Sepolia every settlement waits ~10 blocks for note maturity, which
-would stall a demo for twenty minutes mid-sentence — the session server hand-
-cranks blocks instead. Nothing here is simulated; only the chain is local.
+1. Connect Ready with STRK20 support (Wallet API >= 0.10.3) on mainnet.
+2. Choose **Shield funds**. Review the token approval, if needed, followed by
+   the deposit. The deposit reveals your address and amount publicly.
+3. Ask a few prompts. Each request carries a signed cumulative usage voucher.
+   Watch accrued units and calls served increase without transactions.
+4. Wait for the deposit to confirm and its notes to mature (about 10 blocks).
+   Your wallet also needs enough funds to cover the pool fee.
+5. Choose **Settle now** and approve the private transfer. Follow the explorer
+   link to check confirmation; a returned transaction hash means submitted.
 
-## What to point at while presenting
+The demo shields 1000 raw STRK units (1e-15 STRK). Shielding and settlement
+each incur a pool fee, which dominates this tiny payment. The recorded mainnet
+run paid 6 STRK per private operation; review current fees in your wallet.
+Unused funds remain in your private balance.
 
-- The **402** panel: terms the provider advertised, including the rate
-  commitment every voucher is signed over.
-- **Owed vs settled**: owed climbs on every call with no chain contact;
-  settled only moves when you press Settle now.
-- **"Next settlement covers N calls"**: the amortisation factor. One flat fee
-  divided across however many calls you waited for — the number the whole
-  design turns on.
-- The **settlement entry**: one private transfer, amount and both parties
-  hidden, for several calls at once. That is the whole argument — the pool
-  charges a flat fee per settlement, so the batch is the only lever.
+The browser uses an ephemeral key to sign vouchers, and payment is voluntary.
+This flow does not lock escrow or enforce payment on-chain. The separate
+anonymizer run recorded in `strk20.json` demonstrates contract-enforced
+settlement. Private transfers hide amount and parties on-chain; the provider
+still receives your prompts and vouchers.
 
-Settlement is manual on purpose. An auto-settle threshold would pay a full
-protocol fee every few calls, which is exactly the behaviour this project
-argues against — a demo that settles on a timer contradicts its own case.
-`runSession` still supports a threshold for unattended runs; set
-`SETTLE_THRESHOLD` to re-enable it here.
+## Verify and build
+
+The payload selfcheck uses Node 24+ and verifies the actual deposit and
+transfer actions against the Wallet API FELT encoding, including addresses.
+
+```bash
+pnpm --filter @strkret/web run selfcheck
+pnpm --filter @strkret/web exec tsc --noEmit
+pnpm --filter @strkret/web run build
+```
+
+These checks do not replace a real Ready wallet test.
+
+## Docker deployment
+
+Build from the repository root. Set `GH_PACKAGES_TOKEN` in your shell to a
+GitHub Packages token with `read:packages`; BuildKit mounts it as a secret.
+It is not a build argument and is not stored in the image.
+
+```bash
+docker build --secret id=gh_packages_token,env=GH_PACKAGES_TOKEN -t strkret:submission .
+```
+
+Set `OPENAI_API_KEY` and optionally `OPENAI_MODEL` in your shell, then:
+
+```bash
+docker run --rm -p 3100:3100 --env OPENAI_API_KEY --env OPENAI_MODEL strkret:submission
+```
+
+For a hosted container, provide those inference variables as runtime secrets
+and expose the server's `PORT` (default 3100). The browser wallet holds all
+funds and privacy keys; the console server needs no account or viewing keys.
+Use `/api/terms` as a health-check endpoint. The `.dockerignore` excludes
+local credentials and build artifacts.
+
+The provider keeps cumulative claim counters in memory; a restart clears
+them. Use one process/replica for this demo. This is a demonstration endpoint
+with provider-funded inference, not a production payment gate.

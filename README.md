@@ -450,23 +450,28 @@ processes, real HTTP between them; the script just starts both for you.
 
 ## Running it in a browser
 
-A console for driving a live session by hand, for presenting the flow rather
-than reading a script's output. Two processes:
+A mainnet console using your own privacy-enabled wallet. Set `OPENAI_API_KEY`
+in the repo-root `.env` (and optionally `OPENAI_MODEL`), then run:
 
 ```bash
-pnpm --filter @strkret/agent-consumer run serve   # devnet + provider + channel (~30s)
-pnpm --filter @strkret/web run dev                # http://localhost:3100
+pnpm --filter @strkret/agent-core run build
+pnpm --filter @strkret/agent-provider run build
+pnpm --filter @strkret/web run dev   # http://localhost:3100
 ```
 
-Type a question, watch the signed claim climb with no chain contact, then
-settle when you choose. Settlement is manual on purpose: an auto-settle
-threshold pays a full protocol fee every few calls, which is the behaviour
-this design exists to avoid, so a demo that settles on a timer argues against
-itself. `runSession` keeps threshold settlement for unattended runs — that is
-what `demo:networked-devnet` shows — and `SETTLE_THRESHOLD` re-enables it in
-the server.
+Connect Ready, shield demo funds, and ask a few questions. Each answer accrues
+a signed usage claim without a chain transaction. After the deposit confirms
+and its notes mature (about 10 blocks), **Settle now** requests one private
+transfer for the accrued amount. Shielding and settlement each incur a pool
+fee; your wallet shows current charges. Unused funds remain shielded.
 
-See [`web/README.md`](web/README.md) for what to point at while presenting.
+The visitor console relies on voluntary payment: its ephemeral voucher key
+does not bind your wallet to an on-chain claim. The recorded mainnet run
+separately demonstrates the anonymizer's on-chain rate and signature checks.
+The console runs its provider through Next.js API routes; it does not need
+the devnet session server.
+
+See [`web/README.md`](web/README.md) for Docker deployment and verification.
 
 ## Running it for real (Sepolia or mainnet)
 
