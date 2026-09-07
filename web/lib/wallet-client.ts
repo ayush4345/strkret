@@ -18,7 +18,7 @@ if (typeof globalThis.Buffer === "undefined") {
 import { createStore } from "@starknet-io/get-starknet-discovery";
 import type { WalletWithStarknetFeatures } from "@starknet-io/get-starknet-wallet-standard/features";
 import { RpcProvider, WalletAccountV6, walletV6, compareVersions, type STRK20_ACTION } from "starknet";
-import { MAINNET_RPC_URL } from "./protocol";
+import { RPC_URL } from "./protocol";
 
 export type { WalletWithStarknetFeatures };
 
@@ -30,7 +30,7 @@ export function listWallets(onChange: (wallets: readonly WalletWithStarknetFeatu
   return store.subscribe(onChange as (w: readonly WalletWithStarknetFeatures[]) => void);
 }
 
-const provider = new RpcProvider({ nodeUrl: MAINNET_RPC_URL });
+const provider = new RpcProvider({ nodeUrl: RPC_URL });
 
 /** Minimum Wallet API version the STRK20 actions below need. */
 const MIN_WALLET_API = "0.10.3";
