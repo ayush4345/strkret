@@ -64,6 +64,53 @@ its terms for exactly this reason — below it, settling costs more than the
 work is worth, and the consumer should know that before it starts spending
 rather than discover it at settlement.
 
+## What the mainnet run cost
+
+Not a projection — this is the run recorded in `strk20.json`, measured from
+the receipts:
+
+| step | gas | pool fee | total |
+| --- | ---: | ---: | ---: |
+| provider register | 2.32 | 6.00 | 8.32 |
+| consumer deposit | 2.44 | 6.00 | 8.44 |
+| **12 metered calls** | **0** | **0** | **0** |
+| anonymizer settle | 2.55 | 6.00 | 8.55 |
+| | | | **25.31 STRK** |
+
+The escrow moved was 1000 wei — about 1e-15 STRK. Economically nothing, and
+that is the point: what costs money here is the fee, not the payment.
+
+Read the middle row first. Twelve calls were served, priced and signed for
+without a single transaction. Paying per call would have meant twelve
+`apply_actions` at 6 STRK each — **72 STRK to move a rounding error**.
+Instead the session cost three on-chain actions, and settling after 100 calls
+would cost exactly the same three. The per-call settlement cost falls toward
+zero while the payment stays shielded.
+
+The number metered off-chain and the number settled on-chain are the same
+number: 12 units metered, 12 units paid to the provider, 988 refunded to the
+consumer out of the 1000 escrow. That equality is enforced by the contract,
+not asserted here — it is visible in the transfers of the settle transaction.
+
+One caveat stated plainly: this run proves the mechanism end-to-end on
+mainnet at demo scale. It does not claim anyone made money on 12 units.
+
+Reproducing it, once `.env` points at mainnet (see "Running it for real"):
+
+```bash
+pnpm --filter @strkret/agent-consumer run demo:metered
+```
+
+The script is network-agnostic — it reads which chain it is on from the pool
+address and adapts. Two things it does only on mainnet: it passes explicit
+`resourceBounds` to skip the broken fee estimate, and it routes proving
+through the Starkscan relay. Set `CHANNEL_ID` to a channel this consumer has
+not settled before, since the high-water mark persists on-chain per
+`(consumer, channel)`. `SKIP_PROVIDER_REGISTER=1` skips step 1 once the
+provider has registered — registration is permanent per account, and
+re-running it reverts, which on mainnet still costs gas and one of the day's
+ten proofs.
+
 ## Why no bespoke ZK circuit
 
 The obvious design is a custom circuit proving "settlement = usage × rate"
@@ -338,6 +385,22 @@ pnpm --filter @strkret/agent-consumer run demo
   [strk20-by-example.org](https://strk20-by-example.org) first. Don't guess
   these; a wrong pool address fails silently in confusing ways. Mainnet pool:
   `0x040337b1af3c663e86e333bab5a4b28da8d4652a15a69beee2b677776ffe812a`.
+- `RPC_URL` — **on mainnet this is not interchangeable.** The node must do
+  two things at once: accept writes, and hash the STRK20 proof extension
+  into the transaction. A v3 transaction carrying a STRK20 proof commits to
+  `poseidonHashMany(proofFacts)`, so a node computing a stock v3 hash
+  derives a different hash and rejects a perfectly valid signature as
+  `Account: invalid signature`. We lost six attempts to this before finding
+  a node that does both:
+  `https://mainnet.nodes.starknet.org/rpc/v0_10` (spec `0.10.3-rc.0`), which
+  is what the recorded mainnet run used. Two dead ends worth naming so you
+  don't repeat them: Starkscan's RPC serves reads and proofs but refuses
+  `addInvokeTransaction` with `method_not_supported_in_pilot`, and a node on
+  an older spec accepts the submission but rejects the signature. Note also
+  that `estimateFee` still fails on this path — a starknet.js BigInt
+  serialization bug, not the node — so mainnet calls pass explicit
+  `resourceBounds`, which skips estimation. See `BOUNDS_MAINNET` in
+  `demo-metered-run.ts`.
 - `PROVING_SERVICE_URL` — a hosted prover. We have a working Sepolia one
   from the STRK20 team (not publicly documented; ask in their Telegram).
   For **mainnet** there is no JSON-RPC prover, but Starkscan runs a REST
@@ -497,11 +560,11 @@ that is the replay guard doing its job.
       for the same account (`check-contract-discovery.ts`)
 - [x] Anonymizer contract declared and deployed on **mainnet** —
       `0x050d3089d17b8552460a9e4b36f5ed95d991493f5f3efaf66d79769cd1840428`
-      (class `0x1c539d0bcb…`), recorded in `strk20.json`. Not yet invoked
-- [ ] Mainnet pool/token addresses confirmed and filled into `.env`
-- [ ] Fund the mainnet consumer account — ~18 STRK for a three-settlement
-      run at 6 STRK each, against 0.32 held
-- [ ] Real run producing the 3 mainnet transaction hashes in `strk20.json`
+      (class `0x1c539d0bcb…`), recorded in `strk20.json`
+- [x] **Run end-to-end on mainnet** — 12 metered calls served off-chain,
+      then settled once through the anonymizer. All three transactions
+      succeeded against the live pool and are listed in `strk20.json`
+      (see "What the mainnet run cost" above)
 - [ ] Live demo URL + demo video
 
 ## License
