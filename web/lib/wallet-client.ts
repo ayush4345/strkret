@@ -17,7 +17,7 @@ if (typeof globalThis.Buffer === "undefined") {
  */
 import { createStore } from "@starknet-io/get-starknet-discovery";
 import type { WalletWithStarknetFeatures } from "@starknet-io/get-starknet-wallet-standard/features";
-import { RpcProvider, WalletAccountV6, walletV6, compareVersions, type STRK20_ACTION } from "starknet";
+import { RpcProvider, WalletAccountV6, type STRK20_ACTION } from "starknet";
 import { RPC_URL } from "./protocol";
 
 export type { WalletWithStarknetFeatures };
@@ -32,33 +32,29 @@ export function listWallets(onChange: (wallets: readonly WalletWithStarknetFeatu
 
 const provider = new RpcProvider({ nodeUrl: RPC_URL });
 
-/** Minimum Wallet API version the STRK20 actions below need. */
-const MIN_WALLET_API = "0.10.3";
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`${label} timed out after ${ms / 1000}s — check for a pending approval in your wallet`)), ms)),
+  ]);
+}
 
 /**
- * Connect to one wallet and confirm it actually understands the STRK20
- * methods below via a version query — never by probing with a real
- * balance/action call, which would trip a wallet's consent prompt for a
- * call that was only ever meant to check capability.
+ * Connect to one wallet.
+ *
+ * Deliberately does NOT probe `walletV6.supportedWalletApi()` first, despite
+ * that being the documented capability-check pattern — observed directly,
+ * not theorized: that call can simply hang with this wallet, silently,
+ * with no popup and no rejection, which reads to a visitor as "nothing
+ * happens" when they click Connect. The same promise-doesn't-resolve
+ * behavior showed up independently on the shield and settle actions (see
+ * the continue-after-stuck handling in page.tsx) — treating it as a
+ * pattern rather than three separate bugs. Going straight to the real
+ * connect handshake, with a timeout so a hang is at least surfaced instead
+ * of silent, is more robust than gating on a probe that may never answer.
  */
 export async function connectWallet(wallet: WalletWithStarknetFeatures): Promise<WalletAccountV6> {
-  // get-starknet-discovery@6.0.3 (which produced `wallet`) resolves against a
-  // newer @starknet-io/types-js than the get-starknet-wallet-standard-v6
-  // copy bundled inside starknet@10.5.0 itself, so pnpm keeps two physically
-  // distinct, structurally-identical copies of `WalletWithStarknetFeatures`.
-  // TS treats them as different nominal types; at runtime they're the same
-  // Wallet Standard object. Cast at this one boundary rather than pin the
-  // whole dependency graph to a single older release under time pressure.
-  const w = wallet as unknown as Parameters<typeof walletV6.supportedWalletApi>[0];
-  const versions = await walletV6.supportedWalletApi(w);
-  const supported = versions.some((v) => compareVersions(v, MIN_WALLET_API) >= 0);
-  if (!supported) {
-    throw new Error(
-      `this wallet does not advertise STRK20 Wallet API >= ${MIN_WALLET_API}. ` +
-        "Try the Ready extension, updated to a build with private-account support.",
-    );
-  }
-  return WalletAccountV6.connect(provider, w);
+  return withTimeout(WalletAccountV6.connect(provider, wallet as never), 30_000, "Wallet connect");
 }
 
 export type { STRK20_ACTION };
