@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { hash } from "starknet";
 import { priceOf } from "@strkret/agent-core/voucher";
-import { STRK_ADDRESS, PROVIDER_ADDRESS, ESCROW_AMOUNT, RATE, RATE_BLIND, UNITS_PER_BLOCK, buildTerms, formatStrk, shieldAction, settlementAction } from "./lib/protocol.ts";
+import { STRK_ADDRESS, PROVIDER_ADDRESS, ESCROW_AMOUNT, RELAYER_FEE_BUFFER, RATE, RATE_BLIND, UNITS_PER_BLOCK, buildTerms, formatStrk, shieldAction, settlementAction } from "./lib/protocol.ts";
 
 // @starknet-io/types-js 0.10.3: both ADDRESS and action amounts use FELT.
 const felt = /^0x(0|[a-fA-F1-9][a-fA-F0-9]{0,62})$/;
@@ -25,7 +25,9 @@ for (const [length, units] of [[0, 1n], [100, 1n], [101, 2n], [200, 2n], [201, 3
   assert.equal(priceOf(terms, "x".repeat(length)), units);
   assert.equal(BigInt(settlementAction(units).amount), units * BigInt(terms.rate));
 }
-assert.equal(formatStrk(ESCROW_AMOUNT), "0.01");
+// Shield is sized to exactly cover the later funding withdraw, not a
+// separate token amount — see the note on protocol.ts's ESCROW_AMOUNT.
+assert.equal(ESCROW_AMOUNT, RELAYER_FEE_BUFFER);
 assert.equal(formatStrk(RATE), "0.0001");
 assert.equal(formatStrk(3n * BigInt(terms.rate)), "0.0003");
 assert.equal(formatStrk(0n), "0");
