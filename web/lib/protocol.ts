@@ -73,6 +73,16 @@ export const RATE_COMMITMENT = hash.computePoseidonHashOnElements([RATE, RATE_BL
  * real cost a visitor pays; that gap is the whole point of the project). */
 export const ESCROW_AMOUNT = 10_000_000_000_000_000n; // 0.01 * 10^18
 
+/** What the visitor sends the relayer, on top of the owed amount, to fund
+ * the relayer's own settlement — its protocol fee plus gas, both paid from
+ * its public balance. Sized generously from observed costs (mainnet:
+ * ~6 STRK fee + ~2.5 STRK gas; Sepolia: ~2 + ~2.5), so a settle doesn't
+ * fail the relayer's own fee check. Any surplus just sits in the relayer's
+ * public balance for the next visitor, rather than being wasted — this is
+ * the same fee the relayer would otherwise have to pay out of pocket every
+ * time, made visitor-funded instead. */
+export const RELAYER_FEE_BUFFER = IS_MAINNET ? 10_000_000_000_000_000_000n : 6_000_000_000_000_000_000n;
+
 /** Display STRK's 18 decimals without rounding through a floating-point number. */
 export function formatStrk(amount: bigint): string {
   const scale = 10n ** 18n;

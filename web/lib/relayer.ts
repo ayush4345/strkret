@@ -4,18 +4,17 @@
  * withdraw, transfer) but not a private tx invoking a third-party contract
  * — confirmed directly by the STRK20 team ("ready does not support proofs
  * generated outside of it... have a relayer backend"). This is that
- * relayer: it holds its own registered, already-shielded account and calls
- * `privacy_invoke` on the visitor's behalf, using the real voucher their
- * ephemeral session key signed during metering. The visitor's own wallet
- * action (shield, then the earlier plain-transfer settle) is untouched —
- * this is an additional, real anonymizer settlement for the same signed
- * claim, not a replacement plumbing path.
+ * relayer: it calls `privacy_invoke` on the visitor's behalf, using the
+ * real voucher their ephemeral session key signed during metering.
  *
- * Sepolia only for now: it spends from a pre-shielded reserve and pays the
- * settlement's flat pool fee itself, on every call. That's free on Sepolia
- * testnet STRK; doing the same on mainnet would mean paying every visitor's
- * settlement fee out of pocket, which is a real cost decision, not a code
- * change — see the README before enabling it there.
+ * On Sepolia the relayer spends from its own pre-shielded reserve — free on
+ * testnet STRK. On mainnet that would mean paying every visitor's
+ * settlement fee out of pocket, so instead the visitor's own settle
+ * transfer (see page.tsx) sends enough to cover both the owed amount and
+ * this relayer's own fee+gas; the relayer only draws down what that
+ * transfer just funded, once it has matured. Same function either way —
+ * only the source of the escrow differs, and that's the visitor's wallet
+ * action, not this file.
  *
  * Requires the relayer account to have already approved the pool for its
  * protocol fee — the pool pulls it via `transferFrom`, and approving inside
@@ -23,8 +22,7 @@
  * Approve it once, generously, out of band:
  *   account.execute({ contractAddress: TOKEN, entrypoint: "approve",
  *     calldata: [POOL, amount, "0"] })
- * then let the approve's block + 10 pass before the next settle. 200 STRK
- * covers roughly 100 settles at the current 2 STRK Sepolia fee.
+ * then let the approve's block + 10 pass before the next settle.
  */
 import { config as loadEnv } from "dotenv";
 import { dirname, resolve } from "node:path";
@@ -33,14 +31,12 @@ import { Open } from "@starkware-libs/starknet-privacy-sdk";
 import { createPrivacyClient } from "@strkret/privacy-client";
 import { claimFromVoucher, encodeInvokeCalldata } from "@strkret/agent-core/anonymizer";
 import { verifyVoucher, voucherFromWire, type VoucherWire } from "@strkret/agent-core/voucher";
-import { RATE, RATE_BLIND, RATE_COMMITMENT, CHANNEL_ID } from "./protocol";
+import {
+  IS_MAINNET, RPC_URL, POOL_ADDRESS, MAINNET_ANONYMIZER_ADDRESS, STRK_ADDRESS,
+  RATE, RATE_BLIND, RATE_COMMITMENT, CHANNEL_ID,
+} from "./protocol";
 
 loadEnv({ path: resolve(dirname(fileURLToPath(import.meta.url)), "../../.env") });
-
-const SEPOLIA_RPC_URL = "http://34.170.198.113:9545/rpc/v0_10";
-const SEPOLIA_POOL_ADDRESS = "0x0254a6b2997ef52e9f830ce1f543f6b29768295e8d17e2267d672c552cfe0d91";
-const SEPOLIA_ANONYMIZER_ADDRESS = "0x04ca3501bfbc7c6efb292d26ca39f04d3914e61608ecee9aef84fab33312372b";
-const SEPOLIA_TOKEN_ADDRESS = "0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d";
 
 function required(name: string): string {
   const v = process.env[name];
@@ -48,14 +44,35 @@ function required(name: string): string {
   return v;
 }
 
+// Mainnet has no JSON-RPC prover; Starkscan runs a REST relay in front of
+// one instead. Its key isn't a standalone env var — it's embedded in
+// MAINNET_RPC_URL (…/rpc/v0_10/SN_MAIN/<key>), the same place
+// demo-metered-run.ts and test-mainnet-register.ts pull it from.
+const MAINNET_PROVER_URL = "https://api.starkscan.co/v1/SN_MAIN";
+function starkscanProverKey(): string {
+  const url = required("MAINNET_RPC_URL");
+  const key = url.split("/").pop();
+  if (!key?.startsWith("mzk_live_key_")) throw new Error("relayer: could not extract the Starkscan key from MAINNET_RPC_URL");
+  return key;
+}
+
+// starknet.js's own estimateFee has a client-side bug on the mainnet path
+// (unrelated to the node), so mainnet submissions pass explicit bounds and
+// skip estimation entirely — sized from a real observed mainnet run, see
+// demo-metered-run.ts's BOUNDS_MAINNET for the full rationale.
+const BOUNDS_MAINNET = {
+  l1_gas: { max_amount: 100n, max_price_per_unit: 300_000_000_000_000n },
+  l2_gas: { max_amount: 130_000_000n, max_price_per_unit: 50_000_000_000n },
+  l1_data_gas: { max_amount: 20_000n, max_price_per_unit: 5_000_000_000_000n },
+};
+
 export interface RelaySettleResult {
   transactionHash: string;
 }
 
 /**
  * Verify the voucher again server-side (never trust what a client claims
- * about its own signature) and settle it for real through the anonymizer,
- * paid and escrowed by this relayer's own account.
+ * about its own signature) and settle it for real through the anonymizer.
  */
 export async function relaySettle(voucherWire: VoucherWire, refundAddress: string): Promise<RelaySettleResult> {
   const voucher = voucherFromWire(voucherWire);
@@ -66,29 +83,33 @@ export async function relaySettle(voucherWire: VoucherWire, refundAddress: strin
   }
   if (voucher.totalUnits <= 0n) throw new Error("nothing owed");
 
+  const accountAddress = required(IS_MAINNET ? "MAINNET_PROVIDER_ACCOUNT_ADDRESS" : "PROVIDER_ACCOUNT_ADDRESS");
+  const accountPrivateKey = required(IS_MAINNET ? "MAINNET_PROVIDER_ACCOUNT_PRIVATE_KEY" : "PROVIDER_ACCOUNT_PRIVATE_KEY");
+  const viewingKey = BigInt(required(IS_MAINNET ? "MAINNET_PROVIDER_VIEWING_KEY" : "PROVIDER_VIEWING_KEY"));
+
   const relayer = await createPrivacyClient({
-    rpcUrl: SEPOLIA_RPC_URL,
-    poolAddress: SEPOLIA_POOL_ADDRESS,
-    accountAddress: required("PROVIDER_ACCOUNT_ADDRESS"),
-    accountPrivateKey: required("PROVIDER_ACCOUNT_PRIVATE_KEY"),
-    viewingKey: BigInt(required("PROVIDER_VIEWING_KEY")),
-    provingServiceUrl: required("PROVING_SERVICE_URL"),
-    indexerUrl: process.env.INDEXER_URL || undefined,
+    rpcUrl: RPC_URL,
+    poolAddress: POOL_ADDRESS,
+    accountAddress,
+    accountPrivateKey,
+    viewingKey,
+    provingServiceUrl: IS_MAINNET ? MAINNET_PROVER_URL : required("PROVING_SERVICE_URL"),
+    indexerUrl: IS_MAINNET ? undefined : (process.env.INDEXER_URL || undefined),
+    starkscanProverApiKey: IS_MAINNET ? starkscanProverKey() : undefined,
   });
 
   // The contract pays `total_units * RATE`, not `total_units` — escrow has
   // to cover the real STRK value, not the raw unit count. One extra unit's
   // worth of RATE as buffer guarantees the refund note is non-zero, matching
-  // the proven pattern in demo-metered-run.ts, which avoids an edge case in
-  // the zero-refund path this relayer has not separately tested.
+  // the proven pattern in demo-metered-run.ts.
   const escrowAmount = voucher.totalUnits * RATE + RATE;
 
   const block = await relayer.provingBlockId();
   const build = await relayer.transfers
     .build({ autoSetup: true, autoSelectNotes: "naive", autoDiscover: { notes: "refresh" } })
-    .with(SEPOLIA_TOKEN_ADDRESS, (t: any) =>
+    .with(STRK_ADDRESS, (t: any) =>
       t
-        .withdraw({ recipient: SEPOLIA_ANONYMIZER_ADDRESS, amount: escrowAmount })
+        .withdraw({ recipient: MAINNET_ANONYMIZER_ADDRESS, amount: escrowAmount })
         .transfer({ recipient: relayer.account.address, amount: Open })
         .transfer({ recipient: refundAddress, amount: Open }),
     )
@@ -99,9 +120,9 @@ export async function relaySettle(voucherWire: VoucherWire, refundAddress: strin
         throw new Error(`expected 2 open notes, got ${args.openNotes.length}`);
       }
       return {
-        contractAddress: SEPOLIA_ANONYMIZER_ADDRESS,
+        contractAddress: MAINNET_ANONYMIZER_ADDRESS,
         calldata: encodeInvokeCalldata(
-          SEPOLIA_TOKEN_ADDRESS,
+          STRK_ADDRESS,
           [claimFromVoucher(voucher, RATE, RATE_BLIND, providerNote.noteId)],
           refundNote.noteId,
         ),
@@ -109,6 +130,6 @@ export async function relaySettle(voucherWire: VoucherWire, refundAddress: strin
     })
     .execute({ provingBlockId: block });
 
-  const transactionHash = await relayer.submit(build.callAndProof);
+  const transactionHash = await relayer.submit(build.callAndProof, IS_MAINNET ? BOUNDS_MAINNET : undefined);
   return { transactionHash };
 }

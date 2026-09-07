@@ -30,7 +30,19 @@ export function listWallets(onChange: (wallets: readonly WalletWithStarknetFeatu
   return store.subscribe(onChange as (w: readonly WalletWithStarknetFeatures[]) => void);
 }
 
-const provider = new RpcProvider({ nodeUrl: RPC_URL });
+export const provider = new RpcProvider({ nodeUrl: RPC_URL });
+
+/** Poll until `provider` reports a block at or past `target`. Used to wait
+ * out note maturity (~10 blocks) after a withdraw before the relayer can
+ * spend what it just received. */
+export async function waitForBlock(target: number, onTick?: (head: number) => void): Promise<void> {
+  for (;;) {
+    const head = await provider.getBlockNumber();
+    onTick?.(head);
+    if (head >= target) return;
+    await new Promise((r) => setTimeout(r, 8000));
+  }
+}
 
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   return Promise.race([
