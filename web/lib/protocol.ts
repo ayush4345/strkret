@@ -68,20 +68,29 @@ export const MIN_SETTLEMENT_UNITS = 1n;
 
 export const RATE_COMMITMENT = hash.computePoseidonHashOnElements([RATE, RATE_BLIND]);
 
-/** The escrow the demo shields — 0.01 STRK, round enough to do demo math on
- * without a calculator, still trivial next to the flat protocol fee (the
- * real cost a visitor pays; that gap is the whole point of the project). */
-export const ESCROW_AMOUNT = 10_000_000_000_000_000n; // 0.01 * 10^18
-
-/** What the visitor sends the relayer, on top of the owed amount, to fund
- * the relayer's own settlement — its protocol fee plus gas, both paid from
- * its public balance. Sized generously from observed costs (mainnet:
- * ~6 STRK fee + ~2.5 STRK gas; Sepolia: ~2 + ~2.5), so a settle doesn't
- * fail the relayer's own fee check. Any surplus just sits in the relayer's
- * public balance for the next visitor, rather than being wasted — this is
- * the same fee the relayer would otherwise have to pay out of pocket every
- * time, made visitor-funded instead. */
+/** What the visitor sends the relayer at settle time, on top of the owed
+ * amount, to fund the relayer's own settlement — its protocol fee plus gas,
+ * both paid from its public balance. Sized generously from observed costs
+ * (mainnet: ~6 STRK fee + ~2.5 STRK gas; Sepolia: ~2 + ~2.5), so a settle
+ * doesn't fail the relayer's own fee check. Any surplus just sits in the
+ * relayer's public balance for the next visitor rather than being wasted —
+ * this is the same fee the relayer would otherwise pay out of pocket every
+ * time, made visitor-funded instead. It's a flat conservative estimate, not
+ * metered to the relayer's actual cost — a real gap, not a rounding
+ * artifact: the difference isn't refunded, it just accumulates as the
+ * relayer's own reserve. Fixing that for real means batching several
+ * visitors into one settlement (the contract already supports it via
+ * Span<ProviderClaim>) rather than sizing this buffer more precisely. */
 export const RELAYER_FEE_BUFFER = IS_MAINNET ? 10_000_000_000_000_000_000n : 6_000_000_000_000_000_000n;
+
+/** What the demo shields upfront. Equal to the fee buffer above, not a
+ * separate small amount — the owed value itself is trivial next to the
+ * buffer (a handful of calls at 0.0001 STRK each), so shielding anything
+ * less would just leave the later funding withdraw short. There's no
+ * withdraw without an existing shielded balance to withdraw from, so this
+ * is sized to be exactly what settlement will actually need, not a token
+ * gesture that sits unused. */
+export const ESCROW_AMOUNT = RELAYER_FEE_BUFFER;
 
 /** Display STRK's 18 decimals without rounding through a floating-point number. */
 export function formatStrk(amount: bigint): string {

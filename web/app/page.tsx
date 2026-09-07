@@ -158,6 +158,24 @@ export default function Page() {
     return () => clearTimeout(id);
   }, [stage, settleStatus]);
 
+  // Step 3, factored out so the funded-normally path and the "continue"
+  // fallback (funding already sent, just no tx hash to confirm it with)
+  // both reach the same real settlement rather than duplicating it.
+  const submitRelaySettle = useCallback(async () => {
+    if (!account || owed <= 0n || !terms) return;
+    setSettleStatus("Relayer settling through the anonymizer…");
+    const voucher = signVoucher(BigInt(terms.channelId), owed, terms.rateCommitment, sessionKeyRef.current);
+    const res = await fetch("/api/relay-settle", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ voucher: voucherToWire(voucher), refundAddress: account.address }),
+    });
+    const data = (await res.json()) as { transactionHash?: string; error?: string };
+    if (!res.ok || !data.transactionHash) throw new Error(data.error || "relay settlement failed");
+    setSettleTx(data.transactionHash);
+    setStage("settled");
+  }, [account, owed, terms]);
+
   const settle = useCallback(async () => {
     if (!account || owed <= 0n || !terms) return;
     setBusy(true);
@@ -187,21 +205,7 @@ export default function Page() {
       const fundBlock = (receipt as { block_number?: number }).block_number ?? (await rpcProvider.getBlockNumber());
       await waitForBlock(fundBlock + 10, (head) => setSettleStatus(`Waiting for note maturity — block ${head}/${fundBlock + 10}…`));
 
-      // Step 3 — the real anonymizer path: sign the current cumulative
-      // total with the same session key that signed every metered call,
-      // then hand it to the relayer. The voucher is verified again
-      // server-side before anything moves; see lib/relayer.ts.
-      setSettleStatus("Relayer settling through the anonymizer…");
-      const voucher = signVoucher(BigInt(terms.channelId), owed, terms.rateCommitment, sessionKeyRef.current);
-      const res = await fetch("/api/relay-settle", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ voucher: voucherToWire(voucher), refundAddress: account.address }),
-      });
-      const data = (await res.json()) as { transactionHash?: string; error?: string };
-      if (!res.ok || !data.transactionHash) throw new Error(data.error || "relay settlement failed");
-      setSettleTx(data.transactionHash);
-      setStage("settled");
+      await submitRelaySettle();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setStage("chat");
@@ -209,21 +213,35 @@ export default function Page() {
       setBusy(false);
       setSettleStatus("");
     }
-  }, [account, owed, terms]);
+  }, [account, owed, terms, submitRelaySettle]);
 
   // See continueAfterShield above — same observed gap between Ready's own
   // UI and the promise it returns to this page.
-  // Unlike the shield step, settlement can't be marked done from here: this
-  // page has no transaction hash to wait note-maturity out on, and the
-  // anonymizer settlement genuinely hasn't run yet. The honest fallback is
-  // to stop waiting on the hung promise and let the visitor retry — a
-  // second withdraw just adds to the relayer's funding, it isn't wasted.
-  const continueAfterSettle = useCallback(() => {
-    setError("If your wallet already shows the funding step done, wait a few minutes for it to confirm, then click Settle again.");
-    setStage("chat");
-    setBusy(false);
-    setSettleStatus("");
-  }, []);
+  // Trusts that the funding step actually landed — Ready's own promise
+  // hanging doesn't mean the withdraw failed, it has meant the opposite
+  // every time this session (confirmed by checking the relayer's balance
+  // directly). No transaction hash means no exact block to wait on, so
+  // this waits a fixed, generous window instead of the precise ~10-block
+  // poll the normal path uses, then attempts the same real settlement.
+  const continueAfterSettle = useCallback(async () => {
+    setBusy(true);
+    setError("");
+    try {
+      const waitMs = 150_000; // ~150s: comfortably past 10 Sepolia/mainnet blocks
+      const stepMs = 5_000;
+      for (let elapsed = 0; elapsed < waitMs; elapsed += stepMs) {
+        setSettleStatus(`Assuming funding landed — waiting for maturity (${Math.round((waitMs - elapsed) / 1000)}s)…`);
+        await new Promise((r) => setTimeout(r, stepMs));
+      }
+      await submitRelaySettle();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setStage("chat");
+    } finally {
+      setBusy(false);
+      setSettleStatus("");
+    }
+  }, [submitRelaySettle]);
 
   const checkBalance = useCallback(async () => {
     if (!account) return;
@@ -356,7 +374,7 @@ export default function Page() {
                     <div className="terminal-symbol" aria-hidden="true">[ 02 ]</div>
                     <p className="eyebrow">Fund your private balance</p>
                     <h3>A small deposit. A private start.</h3>
-                    <p>Shield {formatStrk(ESCROW_AMOUNT)} STRK into your private balance. Your wallet may request a token approval first. Review the pool fee and gas charges before confirming.</p>
+                    <p>Shield {formatStrk(ESCROW_AMOUNT)} STRK into your private balance — sized to cover a real settlement later, not a token amount. Your wallet may request a token approval first. Review the pool fee and gas charges before confirming.</p>
                     <div className="wallet-options">
                       <button className="btn" onClick={() => void doShield()} disabled={busy} type="button">
                         {busy ? "Waiting for wallet…" : "Shield funds"}<span aria-hidden="true">↗</span>
