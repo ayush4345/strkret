@@ -10,7 +10,7 @@ import {
   type WalletWithStarknetFeatures,
 } from "../lib/wallet-client";
 import type { WalletAccountV6 } from "starknet";
-import { STRK_ADDRESS, ESCROW_AMOUNT, shieldAction, settlementAction } from "../lib/protocol";
+import { STRK_ADDRESS, ESCROW_AMOUNT, IS_MAINNET, shieldAction, settlementAction } from "../lib/protocol";
 
 interface CallRecord {
   prompt: string;
@@ -175,221 +175,198 @@ export default function Page() {
     setBusy(false);
   }, []);
 
+  const sessionOpen = account && stage !== "connect" && stage !== "shield";
+  const activeStep = !account ? 0 : stage === "shield" ? 1 : stage === "chat" ? 2 : 3;
+  const explorer = IS_MAINNET ? "https://voyager.online" : "https://sepolia.voyager.online";
+
   return (
-    <main className="shell dash">
-      <header className="dash__head">
-        <div>
-          <h1>Strkret</h1>
-          <p className="dash__sub">
-            A live mainnet channel: connect your own privacy-enabled Starknet wallet, chat with a
-            metered provider agent, then pay for the accumulated usage in one shielded transfer.
-            Signing each usage voucher is free; shielding and settlement each incur a pool fee.
-          </p>
+    <>
+      <a className="skip-link" href="#console">Skip to console</a>
+      <div className="announcement">
+        <span>Private by protocol. Open by design.</span>
+        <a href="https://strk20.starknet.io/hackathon" target="_blank" rel="noreferrer">Built for the STRK20 Private Sprint <span aria-hidden="true">↗</span></a>
+      </div>
+      <header className="site-header">
+        <div className="wrap nav-bar">
+          <a className="wordmark" href="#" aria-label="Strkret home">
+            <span className="brand-mark" aria-hidden="true"><i /><i /><i /></span>strkret<span className="wordmark__dot">.</span>
+          </a>
+          <nav aria-label="Main navigation">
+            <a href="#console">Console</a>
+            <a href="#how-it-works">How it works</a>
+            <a href="https://github.com/ayush4345/strkret" target="_blank" rel="noreferrer">GitHub <span aria-hidden="true">↗</span></a>
+          </nav>
+          <span className="network"><i className="status-dot" />Starknet {IS_MAINNET ? "mainnet" : "Sepolia"}</span>
         </div>
-        <span className={`pill ${account ? "pill--open" : "pill--work"}`}>
-          <i className="pill__dot" />
-          {account ? shorten(account.address) : "wallet not connected"}
-        </span>
       </header>
 
-      {!account && (
-        <section className="panel" style={{ marginTop: "1.75rem" }}>
-          <h2 className="panel__head">1 · Connect a privacy-enabled wallet</h2>
-          <p className="panel__note">
-            Needs the STRK20 Wallet API (Wallet API ≥ 0.10.3) — the Ready extension is the wallet
-            the STRK20 team tests this against. Your wallet handles your viewing key and proving;
-            this page never sees either.
-          </p>
-          {wallets.length === 0 ? (
-            <p className="hint">No wallet detected yet. Install or unlock one, then reload.</p>
-          ) : (
-            <div className="ask" style={{ marginTop: "1rem" }}>
-              {wallets.map((w) => (
-                <button key={w.name} className="btn" onClick={() => void doConnect(w)} disabled={busy}>
-                  Connect {w.name}
-                </button>
-              ))}
-            </div>
-          )}
-          {connectError && <p className="err">{connectError}</p>}
-        </section>
-      )}
-
-      {account && stage === "shield" && (
-        <section className="panel" style={{ marginTop: "1.75rem" }}>
-          <h2 className="panel__head">2 · Shield demo funds</h2>
-          <p className="panel__note">
-            Shield {ESCROW_AMOUNT.toString()} raw units of STRK (about 1e-15 STRK) into your own
-            private balance. Your wallet may first request a separate token approval; review the
-            pool fee and any gas charges in its prompts. The deposit is public, including your
-            address and amount. These funds remain under your control; they are not locked in escrow.
-          </p>
-          <div className="ask" style={{ marginTop: "1rem" }}>
-            <button className="btn" onClick={() => void doShield()} disabled={busy} type="button">
-              {busy ? "Waiting for wallet…" : "Shield funds"}
-            </button>
-            {shieldStuck && (
-              <button className="btn btn--ghost" onClick={continueAfterShield} type="button">
-                Already confirmed in my wallet — continue
-              </button>
-            )}
-          </div>
-          {shieldStuck && (
-            <p className="ask__hint">
-              If your wallet already shows this done, this page&rsquo;s own confirmation can lag
-              behind it — use the button above rather than wait indefinitely.
+      <main>
+        <section className="hero">
+          <div className="hero__grid" aria-hidden="true" />
+          <div className="wrap hero__inner">
+            <p className="eyebrow"><span />Confidential agent commerce</p>
+            <h1>EVERY CALL COUNTS.<br /><span>ONE PRIVATE PAYMENT.</span></h1>
+            <p className="hero__description">
+              Put your agents to work. Meter every request off-chain, then settle the total
+              in one private transfer. Powered by STRK20 on Starknet.
             </p>
-          )}
-          {error && <p className="err">{error}</p>}
+            <div className="hero__actions">
+              <a className="btn" href="#console">Launch console <span aria-hidden="true">↗</span></a>
+              <a className="text-link" href="https://github.com/ayush4345/strkret#readme" target="_blank" rel="noreferrer">Explore the protocol <span aria-hidden="true">↗</span></a>
+            </div>
+            <div className="hero__facts" aria-label="Project evidence">
+              <span><b>03</b> Recorded mainnet transactions</span>
+              <span><b>14</b> Contract tests</span>
+              <span><b>00</b> Transactions per API call</span>
+            </div>
+          </div>
         </section>
-      )}
 
-      {account && stage !== "connect" && stage !== "shield" && (
-        <>
-          <section className="tape" aria-label="Session meters" style={{ marginTop: "1.75rem" }}>
-            <div className="tape__cell">
-              <div className="tape__k">accrued off-chain</div>
-              <div className="tape__v tape__v--meter">{owed.toString()}</div>
-              <div className="tape__s">signed per call · no chain contact · free</div>
+        <section className="workspace" id="console">
+          <div className="wrap">
+            <div className="section-heading">
+              <div><p className="eyebrow">01 / Live console</p><h2>Your usage. Your wallet.</h2></div>
+              <span className={`wallet-status ${account ? "wallet-status--connected" : ""}`}>
+                <i className="status-dot" />{account ? shorten(account.address) : "Wallet not connected"}
+              </span>
             </div>
-            <div className="tape__cell">
-              <div className="tape__k">calls served</div>
-              <div className="tape__v tape__v--brand">{calls.length}</div>
-              <div className="tape__s">this channel, this browser session</div>
-            </div>
-            <div className="tape__cell">
-              <div className="tape__k">settlement</div>
-              <div className="tape__v">{stage === "settled" ? "submitted" : owed > 0n ? "ready" : "nothing owed"}</div>
-              <div className="tape__s">
-                {stage === "settled" ? "check confirmation in the explorer" : "one flat fee, whenever you choose"}
-              </div>
-            </div>
-          </section>
 
-          <div className="dash__grid">
-            <section className="panel" aria-labelledby="p-console">
-              <h2 id="p-console" className="panel__head">3 · Agent console</h2>
-              <form
-                className="ask"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  void ask();
-                }}
-              >
-                <input
-                  ref={inputRef}
-                  type="text"
-                  value={prompt}
-                  onChange={(e) => setPrompt(e.target.value)}
-                  placeholder="Ask the provider agent…"
-                  disabled={busy || stage === "settled"}
-                  aria-label="Prompt"
-                />
-                <button className="btn" type="submit" disabled={busy || !prompt.trim() || stage === "settled"}>
-                  {busy && stage !== "settling" ? "Working…" : "Ask & meter"}
-                </button>
-                <button
-                  className="btn btn--ghost"
-                  type="button"
-                  onClick={() => void settle()}
-                  disabled={busy || owed <= 0n || stage === "settled"}
-                >
-                  {stage === "settling" ? "Settling…" : "Settle now"}
-                </button>
-                {settleStuck && (
-                  <button className="btn btn--ghost" type="button" onClick={continueAfterSettle}>
-                    Already confirmed in my wallet — continue
-                  </button>
-                )}
-              </form>
-              <p className="ask__hint">
-                Every call signs a fresh voucher off-chain and free. Settling is your decision —
-                one private transfer pays the accrued amount. Your unused funds remain shielded.
-                Before settling, wait for the deposit to confirm and for its notes to mature
-                (about 10 blocks). Your wallet must also have enough funds for the pool fee.
-              </p>
-              {error && <p className="err">{error}</p>}
-              {depositTx && (
-                <p className="ask__hint">
-                  deposit submitted: {depositTx.startsWith("0x") ? (
-                    <a href={`https://voyager.online/tx/${depositTx}`} target="_blank" rel="noreferrer">{shorten(depositTx)}</a>
-                  ) : (
-                    depositTx
-                  )}
-                </p>
-              )}
-              {settleTx && (
-                <p className="ask__hint">
-                  settlement submitted: {settleTx.startsWith("0x") ? (
-                    <a href={`https://voyager.online/tx/${settleTx}`} target="_blank" rel="noreferrer">{shorten(settleTx)}</a>
-                  ) : (
-                    settleTx
-                  )}
-                </p>
-              )}
-
-              {calls.length === 0 ? (
-                <p className="hint">No calls yet — ask something above.</p>
-              ) : (
-                <ul className="log">
-                  {[...calls].reverse().map((c) => (
-                    <li className="turn" key={c.at}>
-                      <div className="turn__row turn__row--you">
-                        <span className="turn__who">you</span>
-                        <p className="turn__text">{c.prompt}</p>
-                      </div>
-                      <div className="turn__row turn__row--agent">
-                        <span className="turn__who">agent</span>
-                        <p className="turn__text">{c.completion}</p>
-                        <div className="turn__meta">
-                          <span>cost {c.cost}</span>
-                          <span>signed claim {c.claimAfter}</span>
-                          <span>chain untouched</span>
-                        </div>
-                      </div>
+            <div className="session-layout">
+              <section className="terminal" aria-labelledby="terminal-heading">
+                <div className="terminal__bar">
+                  <h3 id="terminal-heading"><span aria-hidden="true">&gt;_</span> Agent terminal</h3>
+                  <span className="terminal__state">{!account ? "Awaiting connection" : stage === "settled" ? "Payment submitted" : "Session active"}</span>
+                </div>
+                <ol className="steps" aria-label="Session progress">
+                  {["Connect", "Shield", "Use", "Settle"].map((label, i) => (
+                    <li key={label} className={i === activeStep ? "is-current" : i < activeStep ? "is-complete" : ""} aria-current={i === activeStep ? "step" : undefined}>
+                      <span>{i < activeStep ? "✓" : `0${i + 1}`}</span>{label}
                     </li>
                   ))}
-                </ul>
-              )}
-            </section>
+                </ol>
 
-            <div style={{ display: "grid", gap: "1.25rem", alignContent: "start" }}>
-              <section className="panel" aria-labelledby="p-terms">
-                <h2 id="p-terms" className="panel__head">Channel terms — from GET /api/terms</h2>
-                <dl className="rows">
-                  <div><dt>Channel</dt><dd className="is-num">{terms?.channelId ?? "—"}</dd></div>
-                  <div><dt>Base rate</dt><dd className="is-num">{terms?.rate ?? "—"}</dd></div>
-                  <div><dt>Min settle</dt><dd className="is-num">{terms?.minSettlementUnits ?? "—"}</dd></div>
-                  <div>
-                    <dt>Rate commitment</dt>
-                    <dd className="is-num" title={terms?.rateCommitment}>
-                      {terms?.rateCommitment ? shorten(terms.rateCommitment) : "—"}
-                    </dd>
+                {!account && (
+                  <div className="onboarding">
+                    <div className="terminal-symbol" aria-hidden="true">[ &gt;_ ]</div>
+                    <p className="eyebrow">Your keys. Your private balance.</p>
+                    <h3>Start a private session.</h3>
+                    <p>Connect a privacy-enabled wallet to use the metered agent. Your wallet handles the keys, proofs, and payments.</p>
+                    <div className="wallet-options">
+                      {wallets.length === 0 ? (
+                        <p className="waiting"><i className="status-dot" />No wallet detected. Install or unlock Ready, then reload.</p>
+                      ) : wallets.map((w) => (
+                        <button key={w.name} className="btn" onClick={() => void doConnect(w)} disabled={busy}>
+                          Connect {w.name} <span aria-hidden="true">↗</span>
+                        </button>
+                      ))}
+                    </div>
+                    <p className="fine-print">Requires a wallet with STRK20 support · Wallet API ≥ 0.10.3</p>
+                    {connectError && <p className="err" role="alert">{connectError}</p>}
                   </div>
-                </dl>
-                <p className="panel__note">
-                  Every call signs a voucher over the rate commitment above, and the provider
-                  refuses to serve one signed for less than it should — that&rsquo;s what gates
-                  metering. Settlement itself is a plain private transfer for whatever accrued,
-                  with amount and identities hidden on-chain. This visitor flow relies on you
-                  choosing to pay; its vouchers do not enforce payment on-chain. The recorded
-                  anonymizer run demonstrates on-chain rate/signature enforcement separately, in{" "}
-                  <code>strk20.json</code>.
-                </p>
+                )}
+
+                {account && stage === "shield" && (
+                  <div className="onboarding onboarding--shield">
+                    <div className="terminal-symbol" aria-hidden="true">[ 02 ]</div>
+                    <p className="eyebrow">Fund your private balance</p>
+                    <h3>A small deposit. A private start.</h3>
+                    <p>Shield {ESCROW_AMOUNT.toString()} raw STRK units (about 1e-15 STRK). Your wallet may request a token approval first. Review the pool fee and gas charges before confirming.</p>
+                    <div className="wallet-options">
+                      <button className="btn" onClick={() => void doShield()} disabled={busy} type="button">
+                        {busy ? "Waiting for wallet…" : "Shield funds"}<span aria-hidden="true">↗</span>
+                      </button>
+                      {shieldStuck && <button className="btn btn--ghost" onClick={continueAfterShield} type="button">Already confirmed in my wallet — continue</button>}
+                    </div>
+                    {shieldStuck && <p className="fine-print">If Ready already shows success, use Continue. Its response to this page can arrive late.</p>}
+                    <p className="privacy-note">The deposit is public, including your address and amount. Funds stay under your control and are not locked in escrow.</p>
+                    {error && <p className="err" role="alert">{error}</p>}
+                  </div>
+                )}
+
+                {sessionOpen && (
+                  <div className="conversation">
+                    {calls.length === 0 ? (
+                      <div className="empty-chat">
+                        <span className="terminal-symbol" aria-hidden="true">&gt;_</span>
+                        <h3>The agent is ready.</h3>
+                        <p>Ask your first question. Each response adds to your signed usage total, with no on-chain transaction.</p>
+                      </div>
+                    ) : (
+                      <ol className="log" aria-label="Conversation">
+                        {calls.map((c) => (
+                          <li className="turn" key={c.at}>
+                            <div className="turn__row"><span className="turn__who">You</span><p>{c.prompt}</p></div>
+                            <div className="turn__row turn__row--agent"><span className="turn__who">Agent</span><div><p>{c.completion}</p><div className="turn__meta"><span>+{c.cost} units</span><span>Signed total: {c.claimAfter}</span><span>No transaction</span></div></div></div>
+                          </li>
+                        ))}
+                      </ol>
+                    )}
+                    <div className="composer">
+                      <form onSubmit={(e) => { e.preventDefault(); void ask(); }}>
+                        <label className="sr-only" htmlFor="agent-prompt">Prompt</label>
+                        <span className="composer__prefix" aria-hidden="true">&gt;</span>
+                        <input id="agent-prompt" ref={inputRef} type="text" value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="Ask the provider agent…" disabled={busy || stage === "settled"} />
+                        <button className="btn" type="submit" disabled={busy || !prompt.trim() || stage === "settled"}>{busy && stage !== "settling" ? "Working…" : "Ask & meter"}<span aria-hidden="true">↗</span></button>
+                      </form>
+                      <div className="settlement-controls">
+                        <p>Signed per call. Paid together.</p>
+                        <button className="btn btn--ghost" type="button" onClick={() => void settle()} disabled={busy || owed <= 0n || stage === "settled"}>{stage === "settling" ? "Settling…" : stage === "settled" ? "Settlement submitted" : "Settle now"}<span aria-hidden="true">↗</span></button>
+                      </div>
+                      {settleStuck && <button className="text-link continue-link" type="button" onClick={continueAfterSettle}>Already confirmed in my wallet — continue →</button>}
+                      {error && <p className="err" role="alert">{error}</p>}
+                      <p className="fine-print">Before settling, wait for the deposit to confirm and its notes to mature (about 10 blocks). Keep enough funds for the pool fee. Unused funds remain shielded.</p>
+                      {(depositTx || settleTx) && (
+                        <div className="receipts" aria-label="Transactions">
+                          {[["Deposit", depositTx], ["Settlement", settleTx]].filter(([, tx]) => tx).map(([label, tx]) => (
+                            <p key={label}><span>{label}</span>{tx.startsWith("0x") ? <a href={`${explorer}/tx/${tx}`} target="_blank" rel="noreferrer">{shorten(tx)} ↗</a> : <span>{tx}</span>}</p>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+                <div className="terminal__foot"><span><i className="status-dot" />Network: {IS_MAINNET ? "Mainnet" : "Sepolia"}</span><span>Powered by STRK20</span></div>
               </section>
 
-              <section className="panel" aria-labelledby="p-why">
-                <h2 id="p-why" className="panel__head">What you&rsquo;re actually paying</h2>
-                <p className="panel__note" style={{ marginTop: ".875rem" }}>
-                  The recorded mainnet run paid a <b>6 STRK pool fee per private operation</b>.
-                  Shielding and settlement each incur a fee; review current charges in your wallet.
-                  Calls accrue tiny usage charges off-chain, with no transaction fee per call.
-                </p>
-              </section>
+              <aside className="session-sidebar" aria-label="Session details">
+                <section className="usage-panel" aria-labelledby="usage-heading">
+                  <div className="panel-heading"><h3 id="usage-heading">Session usage</h3><span className="live-label"><i className="status-dot" />{account ? "Live" : "Standby"}</span></div>
+                  <p className="usage-label">Accrued off-chain</p>
+                  <p className="usage-total" aria-live="polite">{owed.toString()}<span>units</span></p>
+                  <div className="usage-rows">
+                    <div><span>Calls served</span><b>{calls.length.toString().padStart(2, "0")}</b></div>
+                    <div><span>Per-call chain fees</span><b>0</b></div>
+                    <div><span>Settlement</span><b className={owed > 0n ? "accent-text" : ""}>{stage === "settled" ? "Submitted" : owed > 0n ? "Ready" : "Nothing owed"}</b></div>
+                  </div>
+                  <p className="fine-print">{stage === "settled" ? "Check your wallet or the explorer for confirmation." : "Many signed requests. One private payment."}</p>
+                </section>
+                <section className="terms-panel" aria-labelledby="terms-heading">
+                  <div className="panel-heading"><h3 id="terms-heading">Provider terms</h3><span>Published</span></div>
+                  <dl className="usage-rows">
+                    <div><dt>Channel</dt><dd>{terms?.channelId ?? "—"}</dd></div>
+                    <div><dt>Base rate</dt><dd>{terms ? `${terms.rate} units` : "—"}</dd></div>
+                    <div><dt>Minimum settlement</dt><dd>{terms ? `${terms.minSettlementUnits} units` : "—"}</dd></div>
+                    <div><dt>Rate commitment</dt><dd title={terms?.rateCommitment}>{terms?.rateCommitment ? shorten(terms.rateCommitment) : "—"}</dd></div>
+                  </dl>
+                  <p className="fine-print">Usage is priced per started block of {terms?.pricing?.charsPerBlock ?? 100} prompt characters.</p>
+                </section>
+                <p className="sidebar-note"><span aria-hidden="true">↳</span> Pool fees apply to shielding and settlement. Your wallet shows the current cost before you confirm.</p>
+              </aside>
             </div>
           </div>
-        </>
-      )}
-    </main>
+        </section>
+
+        <section className="how-section wrap" id="how-it-works">
+          <div className="section-heading"><div><p className="eyebrow">02 / The protocol</p><h2>Meter per call. Settle per batch.</h2></div><span className="section-caption">Less on-chain. More done.</span></div>
+          <div className="how-grid">
+            <article><span className="how-number">01 /</span><h3>Shield your funds.</h3><p>Move STRK into your private balance. Your wallet holds the keys and handles the proof.</p></article>
+            <article><span className="how-number">02 /</span><h3>Make every call count.</h3><p>Each request carries a signed usage voucher. The provider verifies it before answering. No transaction per call.</p></article>
+            <article><span className="how-number">03 /</span><h3>Pay once. Stay private.</h3><p>Settle your total in one private transfer. The amount and parties stay hidden on-chain.</p></article>
+          </div>
+          <div className="disclosure"><span className="eyebrow">Know what stays private</span><p>Deposits are public. The provider sees your prompts and vouchers. This console relies on voluntary payment; the separate <a href="https://github.com/ayush4345/strkret#what-the-mainnet-run-cost" target="_blank" rel="noreferrer">recorded anonymizer run ↗</a> demonstrates on-chain rate and signature enforcement.</p></div>
+        </section>
+      </main>
+      <footer className="wrap site-footer"><a className="wordmark" href="#">strkret<span className="wordmark__dot">.</span></a><span>Confidential commerce for autonomous agents.</span><a className="text-link" href="https://github.com/ayush4345/strkret" target="_blank" rel="noreferrer">Open source ↗</a></footer>
+    </>
   );
 }
