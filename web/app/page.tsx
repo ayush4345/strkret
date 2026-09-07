@@ -73,6 +73,25 @@ export default function Page() {
     }
   }, []);
 
+  // Ready has shown the deposit as done in its own UI while the
+  // `strk20InvokeTransaction()` promise it returns to this page stayed
+  // pending — observed directly, not theorized. Rather than trust that
+  // promise to resolve in step with the wallet's own state, treat it as
+  // advisory: if it settles, great, keep the real tx hash; if the wallet
+  // visibly finished and this page is still stuck, a manual continue moves
+  // on regardless. Nothing after this needs the deposit to have literally
+  // resolved in our code — metering is off-chain, and by the time Settle is
+  // clicked, real time has passed either way.
+  const [shieldStuck, setShieldStuck] = useState(false);
+  useEffect(() => {
+    if (stage !== "shield" || !busy) {
+      setShieldStuck(false);
+      return;
+    }
+    const id = setTimeout(() => setShieldStuck(true), 6000);
+    return () => clearTimeout(id);
+  }, [stage, busy]);
+
   const doShield = useCallback(async () => {
     if (!account) return;
     setBusy(true);
@@ -87,6 +106,12 @@ export default function Page() {
       setBusy(false);
     }
   }, [account]);
+
+  const continueAfterShield = useCallback(() => {
+    setDepositTx((prev) => prev || "confirmed in wallet, hash not returned to this page");
+    setStage("chat");
+    setBusy(false);
+  }, []);
 
   const ask = useCallback(async () => {
     if (!prompt.trim()) return;
@@ -113,6 +138,16 @@ export default function Page() {
     }
   }, [prompt]);
 
+  const [settleStuck, setSettleStuck] = useState(false);
+  useEffect(() => {
+    if (stage !== "settling") {
+      setSettleStuck(false);
+      return;
+    }
+    const id = setTimeout(() => setSettleStuck(true), 6000);
+    return () => clearTimeout(id);
+  }, [stage]);
+
   const settle = useCallback(async () => {
     if (!account || owed <= 0n) return;
     setBusy(true);
@@ -131,6 +166,14 @@ export default function Page() {
       setBusy(false);
     }
   }, [account, owed]);
+
+  // See continueAfterShield above — same observed gap between Ready's own
+  // UI and the promise it returns to this page.
+  const continueAfterSettle = useCallback(() => {
+    setSettleTx((prev) => prev || "confirmed in wallet, hash not returned to this page");
+    setStage("settled");
+    setBusy(false);
+  }, []);
 
   return (
     <main className="shell dash">
@@ -181,9 +224,22 @@ export default function Page() {
             pool fee and any gas charges in its prompts. The deposit is public, including your
             address and amount. These funds remain under your control; they are not locked in escrow.
           </p>
-          <button className="btn" onClick={() => void doShield()} disabled={busy} style={{ marginTop: "1rem" }}>
-            {busy ? "Waiting for wallet…" : "Shield funds"}
-          </button>
+          <div className="ask" style={{ marginTop: "1rem" }}>
+            <button className="btn" onClick={() => void doShield()} disabled={busy} type="button">
+              {busy ? "Waiting for wallet…" : "Shield funds"}
+            </button>
+            {shieldStuck && (
+              <button className="btn btn--ghost" onClick={continueAfterShield} type="button">
+                Already confirmed in my wallet — continue
+              </button>
+            )}
+          </div>
+          {shieldStuck && (
+            <p className="ask__hint">
+              If your wallet already shows this done, this page&rsquo;s own confirmation can lag
+              behind it — use the button above rather than wait indefinitely.
+            </p>
+          )}
           {error && <p className="err">{error}</p>}
         </section>
       )}
@@ -240,6 +296,11 @@ export default function Page() {
                 >
                   {stage === "settling" ? "Settling…" : "Settle now"}
                 </button>
+                {settleStuck && (
+                  <button className="btn btn--ghost" type="button" onClick={continueAfterSettle}>
+                    Already confirmed in my wallet — continue
+                  </button>
+                )}
               </form>
               <p className="ask__hint">
                 Every call signs a fresh voucher off-chain and free. Settling is your decision —
@@ -250,12 +311,20 @@ export default function Page() {
               {error && <p className="err">{error}</p>}
               {depositTx && (
                 <p className="ask__hint">
-                  deposit submitted: <a href={`https://voyager.online/tx/${depositTx}`} target="_blank" rel="noreferrer">{shorten(depositTx)}</a>
+                  deposit submitted: {depositTx.startsWith("0x") ? (
+                    <a href={`https://voyager.online/tx/${depositTx}`} target="_blank" rel="noreferrer">{shorten(depositTx)}</a>
+                  ) : (
+                    depositTx
+                  )}
                 </p>
               )}
               {settleTx && (
                 <p className="ask__hint">
-                  settlement submitted: <a href={`https://voyager.online/tx/${settleTx}`} target="_blank" rel="noreferrer">{shorten(settleTx)}</a>
+                  settlement submitted: {settleTx.startsWith("0x") ? (
+                    <a href={`https://voyager.online/tx/${settleTx}`} target="_blank" rel="noreferrer">{shorten(settleTx)}</a>
+                  ) : (
+                    settleTx
+                  )}
                 </p>
               )}
 
