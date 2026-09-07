@@ -12,3 +12,4 @@ test-mainnet-register.ts
 .next/
 next-env.d.ts
 .env.*
+docs/DEMO-SCRIPT.md
