@@ -92,9 +92,6 @@ number: 12 units metered, 12 units paid to the provider, 988 refunded to the
 consumer out of the 1000 escrow. That equality is enforced by the contract,
 not asserted here — it is visible in the transfers of the settle transaction.
 
-One caveat stated plainly: this run proves the mechanism end-to-end on
-mainnet at demo scale. It does not claim anyone made money on 12 units.
-
 Reproducing it, once `.env` points at mainnet (see "Running it for real"):
 
 ```bash
@@ -110,6 +107,51 @@ not settled before, since the high-water mark persists on-chain per
 provider has registered — registration is permanent per account, and
 re-running it reverts, which on mainnet still costs gas and one of the day's
 ten proofs.
+
+## What's built
+
+**Runs on mainnet.** Twelve metered calls served off-chain and settled once
+through our own anonymizer contract, against the live STRK20 pool. Three
+successful mainnet transactions, listed in `strk20.json`.
+
+**The anonymizer contract** (`contracts/metering-anonymizer`) — 14/14 tests,
+verified on devnet, Sepolia and mainnet. It verifies the consumer's
+signature and the rate commitment on-chain, so a provider cannot inflate
+usage and a consumer cannot repudiate it. A security review is documented in
+that package's README, including the two findings it fixed: an unenforced
+settlement amount, and a reentrancy path through the caller-supplied token.
+
+**Settlement is batched.** `privacy_invoke` takes a span of provider claims,
+so a consumer using M providers pays them in one settlement instead of M. At
+6 STRK a settlement, that is the difference between 6 and 6M — and the only
+lever available, since the fee itself is flat.
+
+**Vouchers are incremental.** Each voucher carries a cumulative total and
+the contract tracks a per-channel high-water mark, so settling twice pays
+the delta rather than the total twice. Verified on Sepolia by reading
+balances back from `discoverNotes()` between rounds rather than trusting the
+run's own logs.
+
+**The rate is enforced, not advertised.** The rate commitment lives inside
+the signed message, so a voucher can only ever be settled at the rate its
+consumer agreed to.
+
+**No hosted indexer required.** Discovery runs off plain `starknet_call`s
+against the pool and decrypts locally with the viewing key — which is what
+makes mainnet possible at all, since no hosted indexer exists there.
+Verified equivalent to the hosted indexer on Sepolia, where both exist.
+
+**The provider sells real work** — an agent answering prompts with a model,
+priced per request, rather than a string reverser standing in for one. The
+payment gate is hardened: consumer pubkey pinning, channel resync after a
+lost response, and a consumer-side ceiling so a provider cannot name a
+figure and be signed for it. Both sides ship `selfcheck` scripts covering
+the refusals.
+
+**An x402-shaped handshake.** An unpaid call gets `402` plus `accepts`, and
+every paid call carries a signed cumulative voucher. Deliberately not x402
+proper — there is no per-request `X-PAYMENT` payload, because per-request
+on-chain payment is exactly what the flat fee rules out.
 
 ## Why no bespoke ZK circuit
 
@@ -501,71 +543,6 @@ allowance" on a deposit that just approved.
 high-water mark persists on-chain per `(consumer, channel)`, so a channel
 already settled at 150 will reject a fresh run starting at 100 — correctly,
 that is the replay guard doing its job.
-
-## Status
-
-- [x] Metering + settlement logic against the Privacy SDK
-- [x] Verified end-to-end against a local devnet (real pool contract, real
-      register/deposit/transfer, real proofs)
-- [x] Verified end-to-end on real Sepolia — both settlement paths: plain
-      `transfer()` (`demo.ts`) and the anonymizer contract
-      (`demo-invoke-sepolia.ts`)
-- [x] The provider sells real work — an agent answering prompts with a
-      model, priced per request and settled confidentially, rather than a
-      string reverser standing in for one
-- [x] Batched settlement — `privacy_invoke` takes a span of provider claims,
-      so a consumer using M provider agents pays them in **one** settlement
-      instead of M. At 6 STRK a settlement that is the difference between 6
-      and 6M, and the only lever available since the fee itself is flat
-- [x] Settlement amount actually enforced — the rate commitment is inside
-      the signed message, so a voucher can only be settled at the rate its
-      consumer agreed to. Previously the commitment was merely passed in
-      calldata beside the rate, which made that check circular and let
-      whoever assembled the transaction choose the payout
-- [x] Anonymizer contract (`contracts/metering-anonymizer`) — 14/14 tests,
-      verified on devnet and Sepolia. Security review done: the unenforced
-      settlement amount and a reentrancy path through the caller-supplied
-      token are fixed, two findings are accepted with reasons, and one is
-      flagged for an independent look (see that package's README)
-- [x] Incremental vouchers with a per-channel high-water mark, so a
-      provider holds a running off-chain claim and settlement pays only the
-      delta — verified on Sepolia (`demo-incremental-sepolia.ts`). The pool
-      charges a flat ~6 STRK per `apply_actions` on mainnet, so per-call
-      on-chain payment isn't viable; metering stays off-chain, settlement
-      batches.
-- [x] Payment gate hardened: consumer pubkey pinning
-      (`ALLOWED_CONSUMER_KEYS`), channel resync after a lost response, and a
-      consumer-side ceiling so a provider can't name a figure and be signed
-      for. Both sides have `selfcheck` scripts covering the refusals
-- [x] Protocol fee read from the pool at runtime rather than hardcoded —
-      Sepolia charges 2 STRK and mainnet 6, so the old constant would have
-      reverted every mainnet call while Sepolia kept passing
-- [x] Two separate OS processes talking over real HTTP for the off-chain
-      metering loop (`demo-networked-devnet.ts`), with an x402-shaped
-      handshake: an unpaid call gets `402` + `accepts`, and every paid call
-      carries a signed cumulative voucher. Deliberately not x402 proper —
-      no per-request `X-PAYMENT` payload, because per-request on-chain
-      payment is the thing the 6 STRK fee rules out
-- [x] Threshold-triggered settlement (`settlementThreshold` on
-      `runSession`) — settles mid-session once enough value accrues, so the
-      flat fee is amortised by design rather than by luck
-- [x] Mainnet prover — Starkscan's STRK20 prover relay, via the adapter in
-      `packages/privacy-client/src/starkscan-prover.ts` (their API is
-      pilot-phase: 10 proofs/day per key, and `deploy_account` isn't
-      served by their RPC)
-- [x] Mainnet discovery — no hosted indexer needed. Discovery runs off
-      plain `starknet_call`s to the pool and decrypts locally against the
-      viewing key, so `indexerUrl` is optional. Verified equivalent to the
-      hosted indexer on Sepolia, where both exist: identical note balances
-      for the same account (`check-contract-discovery.ts`)
-- [x] Anonymizer contract declared and deployed on **mainnet** —
-      `0x050d3089d17b8552460a9e4b36f5ed95d991493f5f3efaf66d79769cd1840428`
-      (class `0x1c539d0bcb…`), recorded in `strk20.json`
-- [x] **Run end-to-end on mainnet** — 12 metered calls served off-chain,
-      then settled once through the anonymizer. All three transactions
-      succeeded against the live pool and are listed in `strk20.json`
-      (see "What the mainnet run cost" above)
-- [ ] Live demo URL + demo video
 
 ## License
 
