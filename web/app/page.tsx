@@ -8,10 +8,9 @@ import {
   listWallets,
   connectWallet,
   type WalletWithStarknetFeatures,
-  type STRK20_ACTION,
 } from "../lib/wallet-client";
 import type { WalletAccountV6 } from "starknet";
-import { STRK_ADDRESS, PROVIDER_ADDRESS, ESCROW_AMOUNT } from "../lib/protocol";
+import { STRK_ADDRESS, ESCROW_AMOUNT, shieldAction, settlementAction } from "../lib/protocol";
 
 interface CallRecord {
   prompt: string;
@@ -79,8 +78,7 @@ export default function Page() {
     setBusy(true);
     setError("");
     try {
-      const actions: STRK20_ACTION[] = [{ type: "deposit", token: STRK_ADDRESS, amount: ESCROW_AMOUNT.toString() }];
-      const { transaction_hash } = await account.strk20InvokeTransaction(actions);
+      const { transaction_hash } = await account.strk20InvokeTransaction([shieldAction()]);
       setDepositTx(transaction_hash);
       setStage("chat");
     } catch (e) {
@@ -121,20 +119,9 @@ export default function Page() {
     setError("");
     setStage("settling");
     try {
-      // A plain private transfer, not our anonymizer's `privacy_invoke` —
-      // Ready currently only relays a private tx whose proof it generated
-      // itself, and that covers the basic pool ops (deposit/withdraw/
-      // transfer) but not an arbitrary third-party contract invoke. The
-      // anonymizer's on-chain rate/signature enforcement is proven
-      // separately by the mainnet run recorded in strk20.json; this path
-      // trades that enforcement for something that actually relays today.
-      // A plain transfer between registered pool users hides the amount
-      // too (our provider registered on this pool in that same mainnet
-      // run), unlike the anonymizer path, where the amount is public.
-      const actions: STRK20_ACTION[] = [
-        { type: "transfer", token: STRK_ADDRESS, amount: owed.toString(), recipient: PROVIDER_ADDRESS },
-      ];
-      const { transaction_hash } = await account.strk20InvokeTransaction(actions);
+      // This console uses a private transfer. The recorded mainnet run
+      // separately demonstrates the anonymizer's on-chain voucher checks.
+      const { transaction_hash } = await account.strk20InvokeTransaction([settlementAction(owed)]);
       setSettleTx(transaction_hash);
       setStage("settled");
     } catch (e) {
@@ -152,9 +139,8 @@ export default function Page() {
           <h1>Strkret</h1>
           <p className="dash__sub">
             A live mainnet channel: connect your own privacy-enabled Starknet wallet, chat with a
-            metered provider agent off-chain and free, then settle in one shielded transaction
-            through the pool. You pay only the flat protocol fee — the number this project exists
-            to amortise.
+            metered provider agent, then pay for the accumulated usage in one shielded transfer.
+            Signing each usage voucher is free; shielding and settlement each incur a pool fee.
           </p>
         </div>
         <span className={`pill ${account ? "pill--open" : "pill--work"}`}>
@@ -188,15 +174,15 @@ export default function Page() {
 
       {account && stage === "shield" && (
         <section className="panel" style={{ marginTop: "1.75rem" }}>
-          <h2 className="panel__head">2 · Shield the escrow</h2>
+          <h2 className="panel__head">2 · Shield demo funds</h2>
           <p className="panel__note">
-            One wallet-prompted mainnet transaction: shields {ESCROW_AMOUNT.toString()} raw units of
-            STRK (about 1e-15 STRK — economically nothing) into the pool, plus the pool&rsquo;s flat
-            protocol fee. This is the real cost of the demo, and it&rsquo;s the number the whole
-            project argues you should pay once, not per call.
+            Shield {ESCROW_AMOUNT.toString()} raw units of STRK (about 1e-15 STRK) into your own
+            private balance. Your wallet may first request a separate token approval; review the
+            pool fee and any gas charges in its prompts. The deposit is public, including your
+            address and amount. These funds remain under your control; they are not locked in escrow.
           </p>
           <button className="btn" onClick={() => void doShield()} disabled={busy} style={{ marginTop: "1rem" }}>
-            {busy ? "Waiting for wallet…" : "Shield escrow"}
+            {busy ? "Waiting for wallet…" : "Shield funds"}
           </button>
           {error && <p className="err">{error}</p>}
         </section>
@@ -217,9 +203,9 @@ export default function Page() {
             </div>
             <div className="tape__cell">
               <div className="tape__k">settlement</div>
-              <div className="tape__v">{stage === "settled" ? "done" : owed > 0n ? "ready" : "nothing owed"}</div>
+              <div className="tape__v">{stage === "settled" ? "submitted" : owed > 0n ? "ready" : "nothing owed"}</div>
               <div className="tape__s">
-                {stage === "settled" ? "paid on mainnet" : "one flat fee, whenever you choose"}
+                {stage === "settled" ? "check confirmation in the explorer" : "one flat fee, whenever you choose"}
               </div>
             </div>
           </section>
@@ -257,18 +243,19 @@ export default function Page() {
               </form>
               <p className="ask__hint">
                 Every call signs a fresh voucher off-chain and free. Settling is your decision —
-                one wallet-prompted transaction pays the provider and refunds the rest, whatever
-                the number of calls behind it.
+                one private transfer pays the accrued amount. Your unused funds remain shielded.
+                Before settling, wait for the deposit to confirm and for its notes to mature
+                (about 10 blocks). Your wallet must also have enough funds for the pool fee.
               </p>
               {error && <p className="err">{error}</p>}
               {depositTx && (
                 <p className="ask__hint">
-                  escrow tx: <code>{shorten(depositTx)}</code>
+                  deposit submitted: <a href={`https://voyager.online/tx/${depositTx}`} target="_blank" rel="noreferrer">{shorten(depositTx)}</a>
                 </p>
               )}
               {settleTx && (
                 <p className="ask__hint">
-                  settled — <code>{shorten(settleTx)}</code>
+                  settlement submitted: <a href={`https://voyager.online/tx/${settleTx}`} target="_blank" rel="noreferrer">{shorten(settleTx)}</a>
                 </p>
               )}
 
@@ -315,10 +302,9 @@ export default function Page() {
                   Every call signs a voucher over the rate commitment above, and the provider
                   refuses to serve one signed for less than it should — that&rsquo;s what gates
                   metering. Settlement itself is a plain private transfer for whatever accrued,
-                  amount and identities both hidden: Ready relays a wallet-generated proof for the
-                  pool&rsquo;s own operations, not an arbitrary contract call, so this path
-                  doesn&rsquo;t route through our anonymizer the way the recorded mainnet run
-                  does — that on-chain rate/signature enforcement is proven separately, in{" "}
+                  with amount and identities hidden on-chain. This visitor flow relies on you
+                  choosing to pay; its vouchers do not enforce payment on-chain. The recorded
+                  anonymizer run demonstrates on-chain rate/signature enforcement separately, in{" "}
                   <code>strk20.json</code>.
                 </p>
               </section>
@@ -326,10 +312,9 @@ export default function Page() {
               <section className="panel" aria-labelledby="p-why">
                 <h2 id="p-why" className="panel__head">What you&rsquo;re actually paying</h2>
                 <p className="panel__note" style={{ marginTop: ".875rem" }}>
-                  The pool charges a <b>flat protocol fee per settlement</b> — 6 STRK on mainnet —
-                  regardless of how much value moves. Two wallet-prompted transactions this page
-                  makes (shield, settle) each pay that fee once; the calls in between cost nothing
-                  and touch no chain, however many you ask.
+                  The recorded mainnet run paid a <b>6 STRK pool fee per private operation</b>.
+                  Shielding and settlement each incur a fee; review current charges in your wallet.
+                  Calls accrue tiny usage charges off-chain, with no transaction fee per call.
                 </p>
               </section>
             </div>

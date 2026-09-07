@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "selfcheck": "node selfcheck.mts",
     "dev": "next dev -p 3100",
     "build": "next build",
     "start": "next start -p 3100"

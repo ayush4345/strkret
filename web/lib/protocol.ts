@@ -6,7 +6,7 @@
  * are exported rather than kept module-private — nothing here is a secret,
  * only the enforcement matters and that lives in the signature check.
  */
-import { hash } from "starknet";
+import { hash, num, type STRK20_ACTION } from "starknet";
 
 export const STRK_ADDRESS = "0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d";
 export const MAINNET_POOL_ADDRESS = "0x040337b1af3c663e86e333bab5a4b28da8d4652a15a69beee2b677776ffe812a";
@@ -30,6 +30,15 @@ export const RATE_COMMITMENT = hash.computePoseidonHashOnElements([UNITS_PER_BLO
  * The real cost a visitor pays is the flat protocol fee, not this amount:
  * that gap is the whole point of the project. */
 export const ESCROW_AMOUNT = 1000n;
+
+// Wallet API amounts and addresses are FELTs: hex without leading-zero padding.
+export const shieldAction = (): STRK20_ACTION => ({
+  type: "deposit", token: num.toHex(STRK_ADDRESS), amount: num.toHex(ESCROW_AMOUNT),
+});
+
+export const settlementAction = (amount: bigint): STRK20_ACTION => ({
+  type: "transfer", token: num.toHex(STRK_ADDRESS), amount: num.toHex(amount), recipient: num.toHex(PROVIDER_ADDRESS),
+});
 
 /** The `accepts` terms both /api/terms and /api/call publish, mirroring
  * `paymentRequired()` in `agents/provider/src/server.ts`. */
