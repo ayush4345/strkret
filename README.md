@@ -326,7 +326,7 @@ sequenceDiagram
     P-->>C: 402 Payment Required + accepts{rate, channelId,<br/>rateCommitment, minSettlementUnits}
 
     C->>Pool: approve allowance, deposit escrow
-    Note over C,Pool: deposit is public; notes need maturity before spending
+    Note over C,Pool: deposit is public, notes need maturity before spending
 
     Note over C,P: metering — per call, no chain fee
     loop N calls
@@ -335,14 +335,14 @@ sequenceDiagram
         P->>P: verify sig, require claim grew by ≥ price
         P-->>C: { completion, cost, claimedUnits }
     end
-    Note over P: verifies signed usage; payment still needs funded submission
+    Note over P: verifies signed usage, payment still needs funded submission
 
     Note over C,Pool: settlement — wait for mature notes (~10 blocks)
 
     alt plain transfer — amount hidden too
         C->>Pool: transfer(owed since last settlement)
         Pool-->>P: encrypted note credited
-        Note over C,Pool: note owners and transfer amount hidden;<br/>submitting account remains public
+        Note over C,Pool: note owners and transfer amount hidden,<br/>submitting account remains public
     else anonymizer — correctness enforced on-chain
         C->>Pool: withdraw(escrow) → Anon
         Pool->>Anon: privacy_invoke(span of claims, one per provider)
@@ -350,10 +350,10 @@ sequenceDiagram
         Anon-->>Pool: One deposit per claim + optional refund
         Pool-->>P: settlement to each provider (amounts public)
         Pool-->>C: refund (amount public)
-        Note over Anon,Pool: voucher inputs public; mark advances
+        Note over Anon,Pool: voucher inputs public, mark advances
     end
 
-    Note over C,Pool: runSession can transfer at a threshold or close;<br/>anonymizer demos exercise a separate settlement path
+    Note over C,Pool: runSession can transfer at a threshold or close,<br/>anonymizer demos exercise a separate settlement path
 ```
 
 A pnpm workspace, TypeScript project references throughout:
