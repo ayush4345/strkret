@@ -16,6 +16,15 @@
  * testnet STRK; doing the same on mainnet would mean paying every visitor's
  * settlement fee out of pocket, which is a real cost decision, not a code
  * change — see the README before enabling it there.
+ *
+ * Requires the relayer account to have already approved the pool for its
+ * protocol fee — the pool pulls it via `transferFrom`, and approving inside
+ * this hot path would add a ~10-block wait to every visitor's settle.
+ * Approve it once, generously, out of band:
+ *   account.execute({ contractAddress: TOKEN, entrypoint: "approve",
+ *     calldata: [POOL, amount, "0"] })
+ * then let the approve's block + 10 pass before the next settle. 200 STRK
+ * covers roughly 100 settles at the current 2 STRK Sepolia fee.
  */
 import { config as loadEnv } from "dotenv";
 import { dirname, resolve } from "node:path";
