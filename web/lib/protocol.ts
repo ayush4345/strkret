@@ -119,6 +119,17 @@ export const withdrawAction = (amount: bigint, recipient: string): STRK20_ACTION
   type: "withdraw", token: num.toHex(STRK_ADDRESS), amount: num.toHex(amount), recipient: num.toHex(recipient),
 });
 
+/** A one-time top-up of the relayer's own SHIELDED reserve — separate from
+ * the per-settle public-balance funding above. The relayer's escrow for
+ * `privacy_invoke` (a few units' worth of RATE) comes from its own private
+ * balance, which only a private transfer can fund. Whoever's wallet sends
+ * this generates its own proof (Ready's, not a Starkscan key with a daily
+ * budget), so it works even when our own backend's proving is rate-limited. */
+export const RELAYER_RESERVE_TOPUP = 10_000_000_000_000_000n; // 0.01 STRK
+export const fundRelayerReserveAction = (): STRK20_ACTION => ({
+  type: "transfer", token: num.toHex(STRK_ADDRESS), amount: num.toHex(RELAYER_RESERVE_TOPUP), recipient: num.toHex(PROVIDER_ADDRESS),
+});
+
 /** Both endpoints publish the settlement RATE bound by RATE_COMMITMENT.
  * Required `pricing` describes usage counts independently of token amounts. */
 export function buildTerms(pricing: { unitsPerBlock: string; charsPerBlock: number }): {

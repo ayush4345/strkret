@@ -105,30 +105,45 @@ export async function relaySettle(voucherWire: VoucherWire, refundAddress: strin
   const escrowAmount = voucher.totalUnits * RATE + RATE;
 
   const block = await relayer.provingBlockId();
-  const build = await relayer.transfers
-    .build({ autoSetup: true, autoSelectNotes: "naive", autoDiscover: { notes: "refresh" } })
-    .with(STRK_ADDRESS, (t: any) =>
-      t
-        .withdraw({ recipient: MAINNET_ANONYMIZER_ADDRESS, amount: escrowAmount })
-        .transfer({ recipient: relayer.account.address, amount: Open })
-        .transfer({ recipient: refundAddress, amount: Open }),
-    )
-    .surplusTo(relayer.account.address)
-    .invoke((args: any) => {
-      const [providerNote, refundNote] = args.openNotes;
-      if (!providerNote || !refundNote) {
-        throw new Error(`expected 2 open notes, got ${args.openNotes.length}`);
-      }
-      return {
-        contractAddress: MAINNET_ANONYMIZER_ADDRESS,
-        calldata: encodeInvokeCalldata(
-          STRK_ADDRESS,
-          [claimFromVoucher(voucher, RATE, RATE_BLIND, providerNote.noteId)],
-          refundNote.noteId,
-        ),
-      };
-    })
-    .execute({ provingBlockId: block });
+  let build;
+  try {
+    build = await relayer.transfers
+      .build({ autoSetup: true, autoSelectNotes: "naive", autoDiscover: { notes: "refresh" } })
+      .with(STRK_ADDRESS, (t: any) =>
+        t
+          .withdraw({ recipient: MAINNET_ANONYMIZER_ADDRESS, amount: escrowAmount })
+          .transfer({ recipient: relayer.account.address, amount: Open })
+          .transfer({ recipient: refundAddress, amount: Open }),
+      )
+      .surplusTo(relayer.account.address)
+      .invoke((args: any) => {
+        const [providerNote, refundNote] = args.openNotes;
+        if (!providerNote || !refundNote) {
+          throw new Error(`expected 2 open notes, got ${args.openNotes.length}`);
+        }
+        return {
+          contractAddress: MAINNET_ANONYMIZER_ADDRESS,
+          calldata: encodeInvokeCalldata(
+            STRK_ADDRESS,
+            [claimFromVoucher(voucher, RATE, RATE_BLIND, providerNote.noteId)],
+            refundNote.noteId,
+          ),
+        };
+      })
+      .execute({ provingBlockId: block });
+  } catch (err) {
+    // Starkscan's mainnet prover has a hard daily budget (10 proofs/key)
+    // that resets on its own schedule, not ours — surface that plainly
+    // rather than the raw 429 body, which reads like a crash on screen.
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes("prover_daily_budget_exhausted")) {
+      throw new Error(
+        "The relayer's mainnet prover has hit its daily proof limit (10/day) and will reset later today — " +
+          "this is a real, live constraint, not a bug. Try again after the reset, or on Sepolia in the meantime.",
+      );
+    }
+    throw err;
+  }
 
   const transactionHash = await relayer.submit(build.callAndProof, IS_MAINNET ? BOUNDS_MAINNET : undefined);
   return { transactionHash };

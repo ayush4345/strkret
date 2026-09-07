@@ -13,7 +13,7 @@ import {
   type WalletWithStarknetFeatures,
 } from "../lib/wallet-client";
 import type { WalletAccountV6 } from "starknet";
-import { STRK_ADDRESS, ESCROW_AMOUNT, IS_MAINNET, PROVIDER_ADDRESS, RELAYER_FEE_BUFFER, RATE, formatStrk, shieldAction, withdrawAction } from "../lib/protocol";
+import { STRK_ADDRESS, ESCROW_AMOUNT, IS_MAINNET, PROVIDER_ADDRESS, RELAYER_FEE_BUFFER, RATE, RELAYER_RESERVE_TOPUP, formatStrk, shieldAction, withdrawAction, fundRelayerReserveAction } from "../lib/protocol";
 
 interface CallRecord {
   prompt: string;
@@ -243,6 +243,21 @@ export default function Page() {
     }
   }, [submitRelaySettle]);
 
+  const [reserveTx, setReserveTx] = useState("");
+  const fundRelayerReserve = useCallback(async () => {
+    if (!account) return;
+    setBusy(true);
+    setError("");
+    try {
+      const { transaction_hash } = await account.strk20InvokeTransaction([fundRelayerReserveAction()]);
+      setReserveTx(transaction_hash);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [account]);
+
   const checkBalance = useCallback(async () => {
     if (!account) return;
     setBusy(true);
@@ -416,6 +431,14 @@ export default function Page() {
                         <p>Signed per call. Paid together.</p>
                         <button className="btn btn--ghost" type="button" onClick={() => void settle()} disabled={busy || owed <= 0n || stage === "settled"}>{stage === "settling" ? (settleStatus || "Settling…") : stage === "settled" ? "Settlement submitted" : "Settle now"}<span aria-hidden="true">↗</span></button>
                       </div>
+                      <button className="text-link" type="button" onClick={() => void fundRelayerReserve()} disabled={busy}>
+                        Top up relayer's reserve (one-time, {formatStrk(RELAYER_RESERVE_TOPUP)} STRK from your own shielded balance) →
+                      </button>
+                      {reserveTx && (
+                        <p className="fine-print">
+                          reserve funded: {reserveTx.startsWith("0x") ? <a href={`${explorer}/tx/${reserveTx}`} target="_blank" rel="noreferrer">{shorten(reserveTx)} ↗</a> : reserveTx}
+                        </p>
+                      )}
                       {stage === "settling" && settleStatus && !settleStuck && <p className="fine-print" role="status">{settleStatus}</p>}
                       {settleStuck && <button className="text-link continue-link" type="button" onClick={continueAfterSettle}>Already confirmed in my wallet — continue →</button>}
                       {error && <p className="err" role="alert">{error}</p>}
