@@ -33,7 +33,7 @@ import { Open } from "@starkware-libs/starknet-privacy-sdk";
 import { createPrivacyClient } from "@strkret/privacy-client";
 import { claimFromVoucher, encodeInvokeCalldata } from "@strkret/agent-core/anonymizer";
 import { verifyVoucher, voucherFromWire, type VoucherWire } from "@strkret/agent-core/voucher";
-import { UNITS_PER_BLOCK, RATE_BLIND, RATE_COMMITMENT, CHANNEL_ID } from "./protocol";
+import { RATE, RATE_BLIND, RATE_COMMITMENT, CHANNEL_ID } from "./protocol";
 
 loadEnv({ path: resolve(dirname(fileURLToPath(import.meta.url)), "../../.env") });
 
@@ -76,11 +76,12 @@ export async function relaySettle(voucherWire: VoucherWire, refundAddress: strin
     indexerUrl: process.env.INDEXER_URL || undefined,
   });
 
-  // A small buffer over what's owed, so the refund note is guaranteed
-  // non-zero — matching the proven pattern in demo-metered-run.ts, which
-  // avoids an edge case in the zero-refund path this relayer has not
-  // separately tested.
-  const escrowAmount = voucher.totalUnits + 1n;
+  // The contract pays `total_units * RATE`, not `total_units` — escrow has
+  // to cover the real STRK value, not the raw unit count. One extra unit's
+  // worth of RATE as buffer guarantees the refund note is non-zero, matching
+  // the proven pattern in demo-metered-run.ts, which avoids an edge case in
+  // the zero-refund path this relayer has not separately tested.
+  const escrowAmount = voucher.totalUnits * RATE + RATE;
 
   const block = await relayer.provingBlockId();
   const build = await relayer.transfers
@@ -101,7 +102,7 @@ export async function relaySettle(voucherWire: VoucherWire, refundAddress: strin
         contractAddress: SEPOLIA_ANONYMIZER_ADDRESS,
         calldata: encodeInvokeCalldata(
           SEPOLIA_TOKEN_ADDRESS,
-          [claimFromVoucher(voucher, UNITS_PER_BLOCK, RATE_BLIND, providerNote.noteId)],
+          [claimFromVoucher(voucher, RATE, RATE_BLIND, providerNote.noteId)],
           refundNote.noteId,
         ),
       };

@@ -10,7 +10,7 @@ import {
   type WalletWithStarknetFeatures,
 } from "../lib/wallet-client";
 import type { WalletAccountV6 } from "starknet";
-import { STRK_ADDRESS, ESCROW_AMOUNT, IS_MAINNET, shieldAction, settlementAction } from "../lib/protocol";
+import { STRK_ADDRESS, IS_MAINNET, shieldAction, settlementAction } from "../lib/protocol";
 
 interface CallRecord {
   prompt: string;
@@ -230,7 +230,7 @@ export default function Page() {
             <h1>EVERY CALL COUNTS.<br /><span>ONE PRIVATE PAYMENT.</span></h1>
             <p className="hero__description">
               Put your agents to work. Meter every request off-chain, then settle the total
-              in one private transfer. Powered by STRK20 on Starknet.
+              through STRK20 on Starknet: {IS_MAINNET ? "one private transfer." : "one sponsored contract settlement on Sepolia."}
             </p>
             <div className="hero__actions">
               <a className="btn" href="#console">Launch console <span aria-hidden="true">↗</span></a>
@@ -292,7 +292,7 @@ export default function Page() {
                     <div className="terminal-symbol" aria-hidden="true">[ 02 ]</div>
                     <p className="eyebrow">Fund your private balance</p>
                     <h3>A small deposit. A private start.</h3>
-                    <p>Shield {ESCROW_AMOUNT.toString()} raw STRK units (about 1e-15 STRK). Your wallet may request a token approval first. Review the pool fee and gas charges before confirming.</p>
+                    <p>Shield 0.01 STRK into your private balance. Your wallet may request a token approval first. Review the pool fee and gas charges before confirming.</p>
                     <div className="wallet-options">
                       <button className="btn" onClick={() => void doShield()} disabled={busy} type="button">
                         {busy ? "Waiting for wallet…" : "Shield funds"}<span aria-hidden="true">↗</span>
@@ -334,9 +334,11 @@ export default function Page() {
                         <p>Signed per call. Paid together.</p>
                         <button className="btn btn--ghost" type="button" onClick={() => void settle()} disabled={busy || owed <= 0n || stage === "settled"}>{stage === "settling" ? "Settling…" : stage === "settled" ? "Settlement submitted" : "Settle now"}<span aria-hidden="true">↗</span></button>
                       </div>
-                      {settleStuck && <button className="text-link continue-link" type="button" onClick={continueAfterSettle}>Already confirmed in my wallet — continue →</button>}
+                      {settleStuck && (IS_MAINNET
+                        ? <button className="text-link continue-link" type="button" onClick={continueAfterSettle}>Already confirmed in my wallet — continue →</button>
+                        : <p className="fine-print" role="status">The relayer is preparing and submitting the proof. Wait for a transaction link; no wallet approval is needed here.</p>)}
                       {error && <p className="err" role="alert">{error}</p>}
-                      <p className="fine-print">Before settling, wait for the deposit to confirm and its notes to mature (about 10 blocks). Keep enough funds for the pool fee. Unused funds remain shielded.</p>
+                      <p className="fine-print">{IS_MAINNET ? "Before settling, wait for the deposit to confirm and its notes to mature (about 10 blocks). Keep enough funds for the pool fee. Unused funds remain shielded." : "On Sepolia, the relayer funds the payout and pool fee. Your shielded deposit stays untouched; the relayer’s escrow remainder is credited to your wallet."}</p>
                       {(depositTx || settleTx) && (
                         <div className="receipts" aria-label="Transactions">
                           {[["Deposit", depositTx], ["Settlement", settleTx]].filter(([, tx]) => tx).map(([label, tx]) => (
@@ -372,7 +374,7 @@ export default function Page() {
                   </dl>
                   <p className="fine-print">Usage is priced per started block of {terms?.pricing?.charsPerBlock ?? 100} prompt characters.</p>
                 </section>
-                <p className="sidebar-note"><span aria-hidden="true">↳</span> Pool fees apply to shielding and settlement. Your wallet shows the current cost before you confirm.</p>
+                <p className="sidebar-note"><span aria-hidden="true">↳</span> {IS_MAINNET ? "Pool fees apply to shielding and settlement. Your wallet shows the current cost before you confirm." : "Your wallet shows the shielding fee. The relayer sponsors settlement from its own testnet funds."}</p>
               </aside>
             </div>
           </div>
@@ -381,7 +383,7 @@ export default function Page() {
         <section className="how-section wrap" id="how-it-works">
           <div className="section-heading"><div><p className="eyebrow">02 / The protocol</p><h2>Meter per call. Settle per batch.</h2></div><span className="section-caption">Less on-chain. More done.</span></div>
           <figure className="flow-diagram" aria-labelledby="flow-caption">
-            <figcaption id="flow-caption"><span>Visitor console flow</span><span>Your wallet keeps the keys</span></figcaption>
+            <figcaption id="flow-caption"><span>Visitor console flow</span><span>{IS_MAINNET ? "Mainnet · wallet payment" : "Sepolia · sponsored settlement"}</span></figcaption>
             <ol className="flow-stages">
               <li>
                 <div className="flow-stage-heading"><h3><span>01 /</span> Shield once</h3><span className="flow-badge">Public deposit · pool fee</span></div>
@@ -412,17 +414,17 @@ export default function Page() {
                   </div>
                 ) : (
                   <div className="flow-route flow-route--three">
-                    <div className="flow-node"><span className="flow-node-label">You sign</span><h4>Session key</h4><p>Sign the accrued total. Ready can&rsquo;t yet relay a private tx calling our contract, so this step stays a signature, not a transaction.</p></div>
+                    <div className="flow-node"><span className="flow-node-label">In your browser</span><h4>Session key</h4><p>Sign the cumulative usage total. No wallet approval at this step.</p></div>
                     <div className="flow-connector"><span>Signed voucher</span><i aria-hidden="true">→</i></div>
-                    <div className="flow-node flow-node--pool"><span className="flow-node-label">Our backend</span><h4>Relayer</h4><p>Re-verifies the voucher, then calls <code>privacy_invoke</code> on the anonymizer from its own pre-shielded balance.</p></div>
+                    <div className="flow-node flow-node--pool"><span className="flow-node-label">Our backend · via STRK20</span><h4>Relayer</h4><p>Verify the voucher. Fund escrow and the fee from the relayer’s reserve, then submit the contract call.</p></div>
                     <div className="flow-connector"><span>On-chain enforcement</span><i aria-hidden="true">→</i></div>
-                    <div className="flow-node"><span className="flow-node-label">Contract-checked</span><h4>Payout + your refund</h4><p>Provider is paid the signed amount; you&rsquo;re refunded the rest.</p></div>
+                    <div className="flow-node"><span className="flow-node-label">MeteringAnonymizer</span><h4>Payout + remainder</h4><p>Credit the provider for unsettled usage × rate. Credit the escrow remainder to your wallet.</p></div>
                   </div>
                 )}
                 <p className="flow-note">
                   {IS_MAINNET
                     ? "Unused funds stay in your private balance. This console relies on you choosing to pay."
-                    : "The relayer pays the pool fee from its own funds on Sepolia testnet STRK. On mainnet this console still settles by private transfer — see below for why."}
+                    : "Sponsored with testnet STRK: your deposit is not spent or refunded by this step. Both credits come from the relayer’s escrow; open-note token and amounts are public."}
                 </p>
               </li>
             </ol>
@@ -430,18 +432,18 @@ export default function Page() {
           <details className="contract-flow">
             <summary><span>{IS_MAINNET ? "Explore the recorded anonymizer path" : "Inside the anonymizer, step by step"}</span><span className="contract-flow__toggle" aria-hidden="true">+</span></summary>
             <div className="contract-flow__body">
-              <p>{IS_MAINNET ? "A separate SDK demo enforces the signed rate and usage on-chain. This console settles mainnet sessions with a plain private transfer instead — Ready can relay its own basic pool operations, not yet a private transaction invoking a third-party contract." : "The same contract stage 03 above just routed through, expanded: what the relayer's privacy_invoke call actually checks and moves."}</p>
+              <p>{IS_MAINNET ? "The recorded SDK demo funds escrow and checks the signed usage and rate on-chain. This mainnet console uses a plain private transfer; its voucher does not enforce payment from your wallet." : "Inside stage 03: the relayer submits your signed voucher with its own escrow. The contract checks the signature and agreed rate, then returns credits to the pool."}</p>
               <div className="flow-route flow-route--three">
-                <div className="flow-node"><span className="flow-node-label">Inputs</span><h4>Voucher + escrow</h4><p>Signed cumulative usage and shielded funds.</p></div>
+                <div className="flow-node"><span className="flow-node-label">Inputs</span><h4>Voucher + escrow</h4><p>{IS_MAINNET ? "Signed usage and consumer-funded escrow in the recorded SDK run." : "Signed usage and relayer-funded escrow on Sepolia."}</p></div>
                 <div className="flow-connector"><span>Pool releases escrow</span><i aria-hidden="true">→</i></div>
                 <div className="flow-node flow-node--pool"><span className="flow-node-label">MeteringAnonymizer</span><h4>Check and settle</h4><p>Verify signature and rate. Pay only the unsettled delta.</p></div>
                 <div className="flow-connector"><span>Open-note credits</span><i aria-hidden="true">→</i></div>
-                <div className="flow-node"><span className="flow-node-label">Back in the pool</span><h4>Payout + refund</h4><p>Provider receives payment; consumer receives the remainder.</p></div>
+                <div className="flow-node"><span className="flow-node-label">Back in the pool</span><h4>{IS_MAINNET ? "Payout + refund" : "Payout + remainder"}</h4><p>{IS_MAINNET ? "Provider receives payment; consumer receives unused escrow." : "Provider receives payment; your wallet receives the relayer’s remaining escrow."}</p></div>
               </div>
               <p className="flow-note">Open-note token and amount are public in this contract path. <a href="https://github.com/ayush4345/strkret#what-the-mainnet-run-cost" target="_blank" rel="noreferrer">See the recorded mainnet run ↗</a></p>
             </div>
           </details>
-          <div className="disclosure"><span className="eyebrow">Know what stays private</span><p>Deposits and transaction timing are public. The provider sees your prompts and vouchers. A private transfer hides its amount and parties on-chain; it does not make your conversation private from the provider.</p></div>
+          <div className="disclosure"><span className="eyebrow">Know what stays private</span><p>Deposits and transaction timing are public. The provider sees your prompts and vouchers. {IS_MAINNET ? "Plain private transfers hide their amount and parties on-chain; contract open-note amounts are public." : "The relayer sees your voucher and wallet address. Contract open-note token and amounts are public; note owners are hidden."} Neither path hides your conversation from the provider.</p></div>
         </section>
       </main>
       <footer className="wrap site-footer"><a className="wordmark" href="#">strkret<span className="wordmark__dot">.</span></a><span>Confidential commerce for autonomous agents.</span><a className="text-link" href="https://github.com/ayush4345/strkret" target="_blank" rel="noreferrer">Open source ↗</a></footer>

@@ -49,27 +49,41 @@ const MAINNET_PROVIDER_ADDRESS = "0x005612b5bafd31d1bb96fcba676a095ebf38517e0a88
 const SEPOLIA_PROVIDER_ADDRESS = "0x056d7965723f50e81f345081a814dd18c48816c594413a6aa7e08124cdb55b01";
 export const PROVIDER_ADDRESS = IS_MAINNET ? MAINNET_PROVIDER_ADDRESS : SEPOLIA_PROVIDER_ADDRESS;
 
-/** 1 unit per prompt, matching `demo-metered-run.ts` — see its header for why
- * that specific value is load-bearing (units and settled price must match). */
+/** Metering unit count — 1 unit per short prompt. This is a COUNT, not an
+ * amount: `MeteredSession`/`RemoteService` accumulate it as the voucher's
+ * `totalUnits`, and it is deliberately kept separate from `RATE` below.
+ * Conflating the two was the original design (unit cost == rate, so the
+ * accumulated count and the settled amount were the same number) — cheap to
+ * reason about, but it meant every "unit" was worth 1 raw wei. Splitting them
+ * is what makes a real per-call price possible without changing what a unit
+ * means to the metering layer. */
 export const UNITS_PER_BLOCK = 1n;
+/** What one unit is worth at settlement — 0.0001 STRK. The contract computes
+ * `(total_units - already_settled) × rate`, so N calls settle for exactly
+ * N × RATE, independent of UNITS_PER_BLOCK. */
+export const RATE = 100_000_000_000_000n; // 0.0001 * 10^18
 export const RATE_BLIND = 42n;
 export const CHANNEL_ID = 100n;
 export const MIN_SETTLEMENT_UNITS = 1n;
 
-export const RATE_COMMITMENT = hash.computePoseidonHashOnElements([UNITS_PER_BLOCK, RATE_BLIND]);
+export const RATE_COMMITMENT = hash.computePoseidonHashOnElements([RATE, RATE_BLIND]);
 
-/** The escrow the demo shields — trivially small, matching the mainnet run.
- * The real cost a visitor pays is the flat protocol fee, not this amount:
- * that gap is the whole point of the project. */
-export const ESCROW_AMOUNT = 1000n;
+/** The escrow the demo shields — 0.01 STRK, round enough to do demo math on
+ * without a calculator, still trivial next to the flat protocol fee (the
+ * real cost a visitor pays; that gap is the whole point of the project). */
+export const ESCROW_AMOUNT = 10_000_000_000_000_000n; // 0.01 * 10^18
 
 // Wallet API amounts and addresses are FELTs: hex without leading-zero padding.
 export const shieldAction = (): STRK20_ACTION => ({
   type: "deposit", token: num.toHex(STRK_ADDRESS), amount: num.toHex(ESCROW_AMOUNT),
 });
 
-export const settlementAction = (amount: bigint): STRK20_ACTION => ({
-  type: "transfer", token: num.toHex(STRK_ADDRESS), amount: num.toHex(amount), recipient: num.toHex(PROVIDER_ADDRESS),
+/** `unitCount` is a raw unit count (e.g. `owed` from the metered session);
+ * this converts it to the real STRK amount at RATE before building the
+ * action, so a plain-transfer settlement charges the same per-call price
+ * the relayer path enforces on-chain. */
+export const settlementAction = (unitCount: bigint): STRK20_ACTION => ({
+  type: "transfer", token: num.toHex(STRK_ADDRESS), amount: num.toHex(unitCount * RATE), recipient: num.toHex(PROVIDER_ADDRESS),
 });
 
 /** The `accepts` terms both /api/terms and /api/call publish, mirroring
