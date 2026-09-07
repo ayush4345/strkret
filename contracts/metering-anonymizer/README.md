@@ -206,6 +206,41 @@ manual step. Still worth confirming this holds for whatever prover mainnet
 ends up using, since "the hosted prover handles it" is a property of that
 specific prover, not of the contract.
 
+## Mainnet
+
+Declared and deployed on Starknet mainnet. **Not yet invoked** — no settlement
+has run against this instance.
+
+- Class hash: `0x1c539d0bcb4a7fc16cb0d6bae06ec451fa7058c06c352d73cdd8014b1cc9d8f`
+- Contract address: `0x050d3089d17b8552460a9e4b36f5ed95d991493f5f3efaf66d79769cd1840428`
+- Declare tx: `0x664f9e8d7b4b26d3a85724bed5316747009f1aa4694307c15f24dfd4df51c9b`
+- Deploy tx: `0x0715f3332988e540c5f4bd8b9041aa9155c922064c6df79cb561e89b197b3546`
+- Cost: 4.53 STRK, almost all of it the declare — the class is 75.9 KB of
+  Sierra and posting it is what you pay for. Deploying an instance of an
+  already-declared class is cheap.
+
+The same code verified on Sepolia below. It is reviewed in-repo but **not
+independently audited** (see Review status), and it computes settlement
+amounts — worth weighing before it moves value that matters.
+
+### Submitting mainnet transactions
+
+Three RPC obstacles, recorded because each cost an attempt:
+
+- **Starkscan's RPC cannot submit declares or account deployments.** Both
+  return `method_not_supported_in_pilot`. It is fine for reads, simulation
+  and invokes.
+- **Lava rejects sncast's `pre_confirmed` block tag** even on its `/rpc/v0_10`
+  path, which reports spec 0.10.2 — it still implements the older `pending`.
+  The failure surfaces as `Invalid block id`, which does not point at the
+  cause.
+- `https://api.cartridge.gg/x/starknet/mainnet` accepts both and is what these
+  deployments used.
+
+One more worth knowing: sncast reserves a **max** resource bound, not the
+estimated fee. A declare estimated at 4.51 STRK demanded a balance above
+~10.11 STRK and then charged 4.53. Fund for the bound, not the estimate.
+
 ## Sepolia
 
 Declared, deployed, and **invoked for real** — see above.

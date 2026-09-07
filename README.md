@@ -495,6 +495,9 @@ that is the replay guard doing its job.
       viewing key, so `indexerUrl` is optional. Verified equivalent to the
       hosted indexer on Sepolia, where both exist: identical note balances
       for the same account (`check-contract-discovery.ts`)
+- [x] Anonymizer contract declared and deployed on **mainnet** —
+      `0x050d3089d17b8552460a9e4b36f5ed95d991493f5f3efaf66d79769cd1840428`
+      (class `0x1c539d0bcb…`), recorded in `strk20.json`. Not yet invoked
 - [ ] Mainnet pool/token addresses confirmed and filled into `.env`
 - [ ] Fund the mainnet consumer account — ~18 STRK for a three-settlement
       run at 6 STRK each, against 0.32 held
