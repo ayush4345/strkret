@@ -153,6 +153,61 @@ every paid call carries a signed cumulative voucher. Deliberately not x402
 proper — there is no per-request `X-PAYMENT` payload, because per-request
 on-chain payment is exactly what the flat fee rules out.
 
+## How deeply this uses STRK20
+
+Not a wrapper around one helper call. The project touches the pool at four
+levels, and implements two of the SDK's own interfaces rather than only
+consuming them.
+
+**Every pool operation.** `register` publishes a viewing key, `deposit`
+shields the escrow, `withdraw` releases it to the anonymizer, and `transfer`
+credits a provider directly on the simpler settlement path. All four run on
+mainnet or Sepolia in the demos, not just in tests.
+
+**Shielded balances, handled properly.** Notes, nullifiers and viewing keys
+are the substrate the whole design sits on. Balances are read back by
+decrypting notes with the viewing key — `discoverNotes()` — which is how the
+incremental-voucher test verifies the high-water mark rather than trusting
+its own logs. Note maturity is respected explicitly: proofs are generated
+against `head − 10`, because proving against an immature note surfaces later
+as a baffling "insufficient allowance" on a deposit that just approved.
+
+**Our own anonymizer contract.** `MeteringAnonymizer` is Cairo we wrote,
+declared and deployed to mainnet, and invoked by the pool through
+`privacy_invoke`. It receives a span of provider claims, verifies each
+consumer signature and rate commitment on-chain, pays
+`(units − already_settled) × rate`, and returns funds to the pool as two
+`OpenNoteDeposit`s — settlement to the provider, refund to the consumer.
+This is the integration point the pool is designed to expose, and using it is
+what makes batched settlement trustworthy rather than merely cheap.
+
+**SDK interfaces implemented, not just called.** Two custom providers plug
+into the SDK's own extension points:
+
+- `StarkscanProverProvider` implements `ProofProviderInterface` against
+  Starkscan's REST proving relay, because mainnet has no JSON-RPC prover.
+  Job queue, polling with backoff, and L1→L2 message decoding.
+- Discovery runs through `ContractDiscoveryProvider`, reading the pool over
+  plain `starknet_call` and decrypting locally — so no hosted indexer is
+  needed, which is the only reason a mainnet run is possible at all.
+
+**Two settlement paths, with different privacy trade-offs**, both working:
+
+| | plain `transfer` | via the anonymizer |
+| --- | --- | --- |
+| amounts | hidden | public |
+| identities | hidden | hidden |
+| correctness | trusted between the parties | enforced on-chain |
+
+The anonymizer trades amount privacy for verifiable correctness — the
+consumer's signature and the agreed rate are checked by the contract, so
+neither side has to trust the other. Which one you want depends on whether
+the counterparty is known.
+
+Stealth accounts are the one STRK20 feature the design does not use: the
+recipients here are pool notes credited by the contract, so there is nothing
+for a stealth address to add.
+
 ## Why no bespoke ZK circuit
 
 The obvious design is a custom circuit proving "settlement = usage × rate"
