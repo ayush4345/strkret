@@ -2,8 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Buffer } from "buffer";
-import { signVoucher, type PaymentRequirements } from "@strkret/agent-core/voucher";
-import { claimFromVoucher, encodeInvokeCalldata } from "@strkret/agent-core/anonymizer";
+import type { PaymentRequirements } from "@strkret/agent-core/voucher";
 import { RemoteService } from "../lib/remote-service";
 import {
   listWallets,
@@ -12,14 +11,7 @@ import {
   type STRK20_ACTION,
 } from "../lib/wallet-client";
 import type { WalletAccountV6 } from "starknet";
-import {
-  STRK_ADDRESS,
-  MAINNET_ANONYMIZER_ADDRESS,
-  PROVIDER_ADDRESS,
-  UNITS_PER_BLOCK,
-  RATE_BLIND,
-  ESCROW_AMOUNT,
-} from "../lib/protocol";
+import { STRK_ADDRESS, PROVIDER_ADDRESS, ESCROW_AMOUNT } from "../lib/protocol";
 
 interface CallRecord {
   prompt: string;
@@ -124,24 +116,23 @@ export default function Page() {
   }, [prompt]);
 
   const settle = useCallback(async () => {
-    if (!account || !terms || owed <= 0n) return;
+    if (!account || owed <= 0n) return;
     setBusy(true);
     setError("");
     setStage("settling");
     try {
-      // Re-sign for the current cumulative total. Any valid signature over
-      // (channelId, totalUnits, rateCommitment) settles the same claim —
-      // the provider already served every call up to this total against
-      // vouchers signed the same way, so this is not a new promise.
-      const voucher = signVoucher(BigInt(terms.channelId), owed, terms.rateCommitment, sessionKeyRef.current);
-      const claim = claimFromVoucher(voucher, UNITS_PER_BLOCK, RATE_BLIND, "${openNoteIds[0]}" as never);
-      const calldata = encodeInvokeCalldata(STRK_ADDRESS, [claim], "${openNoteIds[1]}" as never);
-
+      // A plain private transfer, not our anonymizer's `privacy_invoke` —
+      // Ready currently only relays a private tx whose proof it generated
+      // itself, and that covers the basic pool ops (deposit/withdraw/
+      // transfer) but not an arbitrary third-party contract invoke. The
+      // anonymizer's on-chain rate/signature enforcement is proven
+      // separately by the mainnet run recorded in strk20.json; this path
+      // trades that enforcement for something that actually relays today.
+      // A plain transfer between registered pool users hides the amount
+      // too (our provider registered on this pool in that same mainnet
+      // run), unlike the anonymizer path, where the amount is public.
       const actions: STRK20_ACTION[] = [
-        { type: "withdraw", token: STRK_ADDRESS, amount: ESCROW_AMOUNT.toString(), recipient: MAINNET_ANONYMIZER_ADDRESS },
-        { type: "transfer", token: STRK_ADDRESS, amount: "OPEN", recipient: PROVIDER_ADDRESS },
-        { type: "transfer", token: STRK_ADDRESS, amount: "OPEN", recipient: account.address },
-        { type: "invoke", contract: MAINNET_ANONYMIZER_ADDRESS, calldata },
+        { type: "transfer", token: STRK_ADDRESS, amount: owed.toString(), recipient: PROVIDER_ADDRESS },
       ];
       const { transaction_hash } = await account.strk20InvokeTransaction(actions);
       setSettleTx(transaction_hash);
@@ -152,7 +143,7 @@ export default function Page() {
     } finally {
       setBusy(false);
     }
-  }, [account, terms, owed]);
+  }, [account, owed]);
 
   return (
     <main className="shell dash">
@@ -314,12 +305,6 @@ export default function Page() {
                   <div><dt>Base rate</dt><dd className="is-num">{terms?.rate ?? "—"}</dd></div>
                   <div><dt>Min settle</dt><dd className="is-num">{terms?.minSettlementUnits ?? "—"}</dd></div>
                   <div>
-                    <dt>Settlement contract</dt>
-                    <dd className="is-num" title={terms?.settlementContract}>
-                      {terms?.settlementContract ? shorten(terms.settlementContract) : "—"}
-                    </dd>
-                  </div>
-                  <div>
                     <dt>Rate commitment</dt>
                     <dd className="is-num" title={terms?.rateCommitment}>
                       {terms?.rateCommitment ? shorten(terms.rateCommitment) : "—"}
@@ -327,8 +312,14 @@ export default function Page() {
                   </div>
                 </dl>
                 <p className="panel__note">
-                  Every voucher is signed over the rate commitment above, so settlement can only
-                  ever happen at the rate this channel published.
+                  Every call signs a voucher over the rate commitment above, and the provider
+                  refuses to serve one signed for less than it should — that&rsquo;s what gates
+                  metering. Settlement itself is a plain private transfer for whatever accrued,
+                  amount and identities both hidden: Ready relays a wallet-generated proof for the
+                  pool&rsquo;s own operations, not an arbitrary contract call, so this path
+                  doesn&rsquo;t route through our anonymizer the way the recorded mainnet run
+                  does — that on-chain rate/signature enforcement is proven separately, in{" "}
+                  <code>strk20.json</code>.
                 </p>
               </section>
 
