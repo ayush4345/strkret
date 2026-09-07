@@ -401,22 +401,36 @@ export default function Page() {
                 <p className="flow-note">The signed total grows with each request. No payment transaction happens here.</p>
               </li>
               <li>
-                <div className="flow-stage-heading"><h3><span>03 /</span> Settle the total</h3><span className="flow-badge">Private transfer · pool fee</span></div>
-                <div className="flow-route flow-route--three">
-                  <div className="flow-node"><span className="flow-node-label">You approve</span><h4>Your wallet</h4><p>Authorize the accrued amount.</p></div>
-                  <div className="flow-connector"><span>Proof via relayer</span><i aria-hidden="true">→</i></div>
-                  <div className="flow-node flow-node--pool"><span className="flow-node-label">On-chain</span><h4>STRK20 pool</h4><p>Verify the proof and move shielded funds.</p></div>
-                  <div className="flow-connector"><span>Private payment</span><i aria-hidden="true">→</i></div>
-                  <div className="flow-node"><span className="flow-node-label">Recipient</span><h4>Provider balance</h4><p>Receive the total inside the pool.</p></div>
-                </div>
-                <p className="flow-note">Unused funds stay in your private balance. This console relies on you choosing to pay.</p>
+                <div className="flow-stage-heading"><h3><span>03 /</span> Settle the total</h3><span className="flow-badge">{IS_MAINNET ? "Private transfer · pool fee" : "Relayed to the contract · pool fee"}</span></div>
+                {IS_MAINNET ? (
+                  <div className="flow-route flow-route--three">
+                    <div className="flow-node"><span className="flow-node-label">You approve</span><h4>Your wallet</h4><p>Authorize the accrued amount.</p></div>
+                    <div className="flow-connector"><span>Private transfer</span><i aria-hidden="true">→</i></div>
+                    <div className="flow-node flow-node--pool"><span className="flow-node-label">On-chain</span><h4>STRK20 pool</h4><p>Move shielded funds directly.</p></div>
+                    <div className="flow-connector"><span>Credited privately</span><i aria-hidden="true">→</i></div>
+                    <div className="flow-node"><span className="flow-node-label">Recipient</span><h4>Provider balance</h4><p>Receive the total inside the pool.</p></div>
+                  </div>
+                ) : (
+                  <div className="flow-route flow-route--three">
+                    <div className="flow-node"><span className="flow-node-label">You sign</span><h4>Session key</h4><p>Sign the accrued total. Ready can&rsquo;t yet relay a private tx calling our contract, so this step stays a signature, not a transaction.</p></div>
+                    <div className="flow-connector"><span>Signed voucher</span><i aria-hidden="true">→</i></div>
+                    <div className="flow-node flow-node--pool"><span className="flow-node-label">Our backend</span><h4>Relayer</h4><p>Re-verifies the voucher, then calls <code>privacy_invoke</code> on the anonymizer from its own pre-shielded balance.</p></div>
+                    <div className="flow-connector"><span>On-chain enforcement</span><i aria-hidden="true">→</i></div>
+                    <div className="flow-node"><span className="flow-node-label">Contract-checked</span><h4>Payout + your refund</h4><p>Provider is paid the signed amount; you&rsquo;re refunded the rest.</p></div>
+                  </div>
+                )}
+                <p className="flow-note">
+                  {IS_MAINNET
+                    ? "Unused funds stay in your private balance. This console relies on you choosing to pay."
+                    : "The relayer pays the pool fee from its own funds on Sepolia testnet STRK. On mainnet this console still settles by private transfer — see below for why."}
+                </p>
               </li>
             </ol>
           </figure>
           <details className="contract-flow">
-            <summary><span>Explore the recorded anonymizer path</span><span className="contract-flow__toggle" aria-hidden="true">+</span></summary>
+            <summary><span>{IS_MAINNET ? "Explore the recorded anonymizer path" : "Inside the anonymizer, step by step"}</span><span className="contract-flow__toggle" aria-hidden="true">+</span></summary>
             <div className="contract-flow__body">
-              <p>{IS_MAINNET ? "A separate SDK demo enforces the signed rate and usage on-chain. This console settles mainnet sessions with a plain private transfer." : "This console settles through exactly this path on Sepolia, via a relayer backend — Ready can shield, deposit and privately transfer, but can't yet relay a private transaction that invokes a third-party contract itself."}</p>
+              <p>{IS_MAINNET ? "A separate SDK demo enforces the signed rate and usage on-chain. This console settles mainnet sessions with a plain private transfer instead — Ready can relay its own basic pool operations, not yet a private transaction invoking a third-party contract." : "The same contract stage 03 above just routed through, expanded: what the relayer's privacy_invoke call actually checks and moves."}</p>
               <div className="flow-route flow-route--three">
                 <div className="flow-node"><span className="flow-node-label">Inputs</span><h4>Voucher + escrow</h4><p>Signed cumulative usage and shielded funds.</p></div>
                 <div className="flow-connector"><span>Pool releases escrow</span><i aria-hidden="true">→</i></div>
