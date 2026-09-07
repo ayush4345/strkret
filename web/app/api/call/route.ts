@@ -11,7 +11,7 @@ import { LlmService } from "@strkret/agent-provider";
 import { buildTerms, UNITS_PER_BLOCK, RATE_COMMITMENT, CHANNEL_ID } from "../../../lib/protocol";
 
 const service = new LlmService(UNITS_PER_BLOCK);
-const terms = buildTerms(service.pricing, service.price({ prompt: "" }));
+const terms = buildTerms(service.pricing);
 const paymentRequired = () => ({ x402Version: 1 as const, accepts: [terms] });
 
 /**

@@ -10,7 +10,7 @@ import {
   type WalletWithStarknetFeatures,
 } from "../lib/wallet-client";
 import type { WalletAccountV6 } from "starknet";
-import { STRK_ADDRESS, IS_MAINNET, shieldAction, settlementAction } from "../lib/protocol";
+import { STRK_ADDRESS, ESCROW_AMOUNT, IS_MAINNET, formatStrk, shieldAction, settlementAction } from "../lib/protocol";
 
 interface CallRecord {
   prompt: string;
@@ -292,7 +292,7 @@ export default function Page() {
                     <div className="terminal-symbol" aria-hidden="true">[ 02 ]</div>
                     <p className="eyebrow">Fund your private balance</p>
                     <h3>A small deposit. A private start.</h3>
-                    <p>Shield 0.01 STRK into your private balance. Your wallet may request a token approval first. Review the pool fee and gas charges before confirming.</p>
+                    <p>Shield {formatStrk(ESCROW_AMOUNT)} STRK into your private balance. Your wallet may request a token approval first. Review the pool fee and gas charges before confirming.</p>
                     <div className="wallet-options">
                       <button className="btn" onClick={() => void doShield()} disabled={busy} type="button">
                         {busy ? "Waiting for wallet…" : "Shield funds"}<span aria-hidden="true">↗</span>
@@ -358,6 +358,7 @@ export default function Page() {
                   <p className="usage-label">Accrued off-chain</p>
                   <p className="usage-total" aria-live="polite">{owed.toString()}<span>units</span></p>
                   <div className="usage-rows">
+                    <div><span>Usage value</span><b>{terms ? `${formatStrk(owed * BigInt(terms.rate))} STRK` : "—"}</b></div>
                     <div><span>Calls served</span><b>{calls.length.toString().padStart(2, "0")}</b></div>
                     <div><span>Per-call chain fees</span><b>0</b></div>
                     <div><span>Settlement</span><b className={owed > 0n ? "accent-text" : ""}>{stage === "settled" ? "Submitted" : owed > 0n ? "Ready" : "Nothing owed"}</b></div>
@@ -368,11 +369,11 @@ export default function Page() {
                   <div className="panel-heading"><h3 id="terms-heading">Provider terms</h3><span>Published</span></div>
                   <dl className="usage-rows">
                     <div><dt>Channel</dt><dd>{terms?.channelId ?? "—"}</dd></div>
-                    <div><dt>Base rate</dt><dd>{terms ? `${terms.rate} units` : "—"}</dd></div>
+                    <div><dt>Rate per unit</dt><dd>{terms ? `${formatStrk(BigInt(terms.rate))} STRK` : "—"}</dd></div>
                     <div><dt>Minimum settlement</dt><dd>{terms ? `${terms.minSettlementUnits} units` : "—"}</dd></div>
                     <div><dt>Rate commitment</dt><dd title={terms?.rateCommitment}>{terms?.rateCommitment ? shorten(terms.rateCommitment) : "—"}</dd></div>
                   </dl>
-                  <p className="fine-print">Usage is priced per started block of {terms?.pricing?.charsPerBlock ?? 100} prompt characters.</p>
+                  <p className="fine-print">Usage units per started {terms?.pricing?.charsPerBlock ?? 100}-character block: {terms?.pricing?.unitsPerBlock ?? "1"}. Pool fees are separate.</p>
                 </section>
                 <p className="sidebar-note"><span aria-hidden="true">↳</span> {IS_MAINNET ? "Pool fees apply to shielding and settlement. Your wallet shows the current cost before you confirm." : "Your wallet shows the shielding fee. The relayer sponsors settlement from its own testnet funds."}</p>
               </aside>

@@ -73,6 +73,13 @@ export const RATE_COMMITMENT = hash.computePoseidonHashOnElements([RATE, RATE_BL
  * real cost a visitor pays; that gap is the whole point of the project). */
 export const ESCROW_AMOUNT = 10_000_000_000_000_000n; // 0.01 * 10^18
 
+/** Display STRK's 18 decimals without rounding through a floating-point number. */
+export function formatStrk(amount: bigint): string {
+  const scale = 10n ** 18n;
+  const fraction = (amount % scale).toString().padStart(18, "0").replace(/0+$/, "");
+  return `${amount / scale}${fraction ? `.${fraction}` : ""}`;
+}
+
 // Wallet API amounts and addresses are FELTs: hex without leading-zero padding.
 export const shieldAction = (): STRK20_ACTION => ({
   type: "deposit", token: num.toHex(STRK_ADDRESS), amount: num.toHex(ESCROW_AMOUNT),
@@ -86,9 +93,9 @@ export const settlementAction = (unitCount: bigint): STRK20_ACTION => ({
   type: "transfer", token: num.toHex(STRK_ADDRESS), amount: num.toHex(unitCount * RATE), recipient: num.toHex(PROVIDER_ADDRESS),
 });
 
-/** The `accepts` terms both /api/terms and /api/call publish, mirroring
- * `paymentRequired()` in `agents/provider/src/server.ts`. */
-export function buildTerms(pricing: { unitsPerBlock: string; charsPerBlock: number }, rate: bigint): {
+/** Both endpoints publish the settlement RATE bound by RATE_COMMITMENT.
+ * Required `pricing` describes usage counts independently of token amounts. */
+export function buildTerms(pricing: { unitsPerBlock: string; charsPerBlock: number }): {
   scheme: "strk20-channel";
   network: string;
   asset: string;
@@ -110,7 +117,7 @@ export function buildTerms(pricing: { unitsPerBlock: string; charsPerBlock: numb
     payTo: PROVIDER_ADDRESS,
     resource: "/api/call",
     description: "llm-inference service, metered per call",
-    rate: rate.toString(),
+    rate: RATE.toString(),
     pricing,
     rateCommitment: RATE_COMMITMENT,
     channelId: CHANNEL_ID.toString(),

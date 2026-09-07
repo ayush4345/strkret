@@ -30,10 +30,17 @@ routes; the standalone devnet session server is not needed.
 5. Choose **Settle now** and approve the private transfer. Follow the explorer
    link to check confirmation; a returned transaction hash means submitted.
 
-The demo shields 1000 raw STRK units (1e-15 STRK). Shielding and settlement
-each incur a pool fee, which dominates this tiny payment. The recorded mainnet
-run paid 6 STRK per private operation; review current fees in your wallet.
-Unused funds remain in your private balance.
+The console shields **0.01 STRK**. Each started block of 100 prompt characters
+adds one usage unit, priced at **0.0001 STRK**. Three short prompts accrue
+three units worth **0.0003 STRK**, before pool fees. Both `/api/terms` and the
+402 response publish `rate: "100000000000000"` (raw STRK units per usage unit);
+`pricing.unitsPerBlock` controls the separate metering count. The UI displays
+the rate and accrued value in STRK.
+
+Shielding and settlement each incur a pool fee. The recorded mainnet run
+used the earlier 1-wei rate and 1000-wei escrow and paid 6 STRK per private
+operation; those historical numbers are unchanged. Review current fees in
+your wallet. Unused funds remain in your private balance.
 
 The browser uses an ephemeral key to sign vouchers, and payment is voluntary.
 This flow does not lock escrow or enforce payment on-chain. The separate
@@ -43,8 +50,9 @@ still receives your prompts and vouchers.
 
 ## Verify and build
 
-The payload selfcheck uses Node 24+ and verifies the actual deposit and
-transfer actions against the Wallet API FELT encoding, including addresses.
+The selfcheck uses Node 24+ and verifies metering boundaries, advertised rate
+against its commitment, exact STRK formatting, settlement amounts, and Wallet
+API FELT encoding, including addresses.
 
 ```bash
 pnpm --filter @strkret/web run selfcheck

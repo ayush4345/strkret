@@ -139,10 +139,11 @@ export interface PaymentRequirements {
   payTo: string;
   resource: string;
   description: string;
-  /** The minimum a request can cost. Not the whole story once price varies. */
+  /** The console publishes raw token units per usage unit here, alongside
+   * `pricing` for usage counts. Legacy flat services use usage units per call. */
   rate: string;
   /**
-   * How price is computed, when it depends on the request. Machine-readable
+   * How usage units are computed, when they depend on the request. Machine-readable
    * on purpose: the consumer signs a voucher for an amount it works out
    * itself, so both sides have to derive the same number from the same rule.
    * A prose description would leave them free to disagree, and they would
