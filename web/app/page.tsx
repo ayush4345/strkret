@@ -358,12 +358,54 @@ export default function Page() {
 
         <section className="how-section wrap" id="how-it-works">
           <div className="section-heading"><div><p className="eyebrow">02 / The protocol</p><h2>Meter per call. Settle per batch.</h2></div><span className="section-caption">Less on-chain. More done.</span></div>
-          <div className="how-grid">
-            <article><span className="how-number">01 /</span><h3>Shield your funds.</h3><p>Move STRK into your private balance. Your wallet holds the keys and handles the proof.</p></article>
-            <article><span className="how-number">02 /</span><h3>Make every call count.</h3><p>Each request carries a signed usage voucher. The provider verifies it before answering. No transaction per call.</p></article>
-            <article><span className="how-number">03 /</span><h3>Pay once. Stay private.</h3><p>Settle your total in one private transfer. The amount and parties stay hidden on-chain.</p></article>
-          </div>
-          <div className="disclosure"><span className="eyebrow">Know what stays private</span><p>Deposits are public. The provider sees your prompts and vouchers. This console relies on voluntary payment; the separate <a href="https://github.com/ayush4345/strkret#what-the-mainnet-run-cost" target="_blank" rel="noreferrer">recorded anonymizer run ↗</a> demonstrates on-chain rate and signature enforcement.</p></div>
+          <figure className="flow-diagram" aria-labelledby="flow-caption">
+            <figcaption id="flow-caption"><span>Visitor console flow</span><span>Your wallet keeps the keys</span></figcaption>
+            <ol className="flow-stages">
+              <li>
+                <div className="flow-stage-heading"><h3><span>01 /</span> Shield once</h3><span className="flow-badge">Public deposit · pool fee</span></div>
+                <div className="flow-route">
+                  <div className="flow-node"><span className="flow-node-label">You control</span><h4>Your wallet</h4><p>Approve and deposit STRK.</p></div>
+                  <div className="flow-connector"><span>Shield funds</span><i aria-hidden="true">→</i></div>
+                  <div className="flow-node flow-node--pool"><span className="flow-node-label">STRK20 pool</span><h4>Your private balance</h4><p>Funds become shielded notes.</p></div>
+                </div>
+              </li>
+              <li>
+                <div className="flow-stage-heading"><h3><span>02 /</span> Use as needed</h3><span className="flow-badge flow-badge--offchain">Off-chain · repeat per call</span></div>
+                <div className="flow-route">
+                  <div className="flow-node"><span className="flow-node-label">In your browser</span><h4>Session key</h4><p>Sign a voucher for the running usage total.</p></div>
+                  <div className="flow-connector flow-connector--both"><span>Prompt + signed voucher</span><i aria-hidden="true">→</i><i aria-hidden="true">←</i><span>AI response + cost</span></div>
+                  <div className="flow-node"><span className="flow-node-label">Off-chain service</span><h4>Provider agent</h4><p>Verify the voucher, then run the model.</p></div>
+                </div>
+                <p className="flow-note">The signed total grows with each request. No payment transaction happens here.</p>
+              </li>
+              <li>
+                <div className="flow-stage-heading"><h3><span>03 /</span> Settle the total</h3><span className="flow-badge">Private transfer · pool fee</span></div>
+                <div className="flow-route flow-route--three">
+                  <div className="flow-node"><span className="flow-node-label">You approve</span><h4>Your wallet</h4><p>Authorize the accrued amount.</p></div>
+                  <div className="flow-connector"><span>Proof via relayer</span><i aria-hidden="true">→</i></div>
+                  <div className="flow-node flow-node--pool"><span className="flow-node-label">On-chain</span><h4>STRK20 pool</h4><p>Verify the proof and move shielded funds.</p></div>
+                  <div className="flow-connector"><span>Private payment</span><i aria-hidden="true">→</i></div>
+                  <div className="flow-node"><span className="flow-node-label">Recipient</span><h4>Provider balance</h4><p>Receive the total inside the pool.</p></div>
+                </div>
+                <p className="flow-note">Unused funds stay in your private balance. This console relies on you choosing to pay.</p>
+              </li>
+            </ol>
+          </figure>
+          <details className="contract-flow">
+            <summary><span>Explore the recorded anonymizer path</span><span className="contract-flow__toggle" aria-hidden="true">+</span></summary>
+            <div className="contract-flow__body">
+              <p>A separate SDK demo enforces the signed rate and usage on-chain. The visitor console above uses a plain private transfer.</p>
+              <div className="flow-route flow-route--three">
+                <div className="flow-node"><span className="flow-node-label">Inputs</span><h4>Voucher + escrow</h4><p>Signed cumulative usage and shielded funds.</p></div>
+                <div className="flow-connector"><span>Pool releases escrow</span><i aria-hidden="true">→</i></div>
+                <div className="flow-node flow-node--pool"><span className="flow-node-label">MeteringAnonymizer</span><h4>Check and settle</h4><p>Verify signature and rate. Pay only the unsettled delta.</p></div>
+                <div className="flow-connector"><span>Open-note credits</span><i aria-hidden="true">→</i></div>
+                <div className="flow-node"><span className="flow-node-label">Back in the pool</span><h4>Payout + refund</h4><p>Provider receives payment; consumer receives the remainder.</p></div>
+              </div>
+              <p className="flow-note">Open-note token and amount are public in this contract path. <a href="https://github.com/ayush4345/strkret#what-the-mainnet-run-cost" target="_blank" rel="noreferrer">See the recorded mainnet run ↗</a></p>
+            </div>
+          </details>
+          <div className="disclosure"><span className="eyebrow">Know what stays private</span><p>Deposits and transaction timing are public. The provider sees your prompts and vouchers. A private transfer hides its amount and parties on-chain; it does not make your conversation private from the provider.</p></div>
         </section>
       </main>
       <footer className="wrap site-footer"><a className="wordmark" href="#">strkret<span className="wordmark__dot">.</span></a><span>Confidential commerce for autonomous agents.</span><a className="text-link" href="https://github.com/ayush4345/strkret" target="_blank" rel="noreferrer">Open source ↗</a></footer>
