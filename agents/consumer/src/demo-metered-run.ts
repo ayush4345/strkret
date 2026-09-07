@@ -211,6 +211,11 @@ async function main() {
   }
 
   console.log("\n[1/4] provider register");
+  if (process.env.SKIP_PROVIDER_REGISTER) {
+    // Registration is permanent per account. Re-running it reverts, and on
+    // mainnet that revert still costs gas and one of the day's 10 proofs.
+    console.log("  skipped (SKIP_PROVIDER_REGISTER set — already registered)");
+  } else {
   await approve(provider, feeBuffer, "provider");
   // Re-registering a viewing key reverts with NON_ZERO_VALUE; on a rerun the
   // provider is already registered and that is fine.
@@ -222,6 +227,7 @@ async function main() {
     console.log(`  registered: ${regHash}`);
   } catch (err) {
     console.log(`  register skipped (already registered): ${(err as Error).message.slice(0, 120)}`);
+  }
   }
 
   // --- 2. Consumer shields the escrow, bundling its own registration. ---

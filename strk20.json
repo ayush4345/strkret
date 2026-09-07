@@ -1,15 +1,11 @@
 {
-  "transactions": [],
+  "transactions": [
+    "0x5d6891d5c5c4ea679a5beaf311046301d434298d181383dd2ef282739d1f033",
+    "0x35c03c6f2a09727a4dc7f9c565ca4cb8c8d179873bf3f420ccb86a23c80d41b",
+    "0x23e848a8a12f2509fa056b8f2d6ea595af2177bcd9cd564012c117ac75b5f6c"
+  ],
   "contracts": [
-    {
-      "name": "MeteringAnonymizer",
-      "network": "mainnet",
-      "class_hash": "0x1c539d0bcb4a7fc16cb0d6bae06ec451fa7058c06c352d73cdd8014b1cc9d8f",
-      "address": "0x050d3089d17b8552460a9e4b36f5ed95d991493f5f3efaf66d79769cd1840428",
-      "declare_tx": "0x664f9e8d7b4b26d3a85724bed5316747009f1aa4694307c15f24dfd4df51c9b",
-      "deploy_tx": "0x0715f3332988e540c5f4bd8b9041aa9155c922064c6df79cb561e89b197b3546",
-      "description": "STRK20 anonymizer: verifies a consumer-signed usage voucher and its rate commitment on-chain, then settles a batch of provider claims out of one shielded escrow."
-    }
+    "0x050d3089d17b8552460a9e4b36f5ed95d991493f5f3efaf66d79769cd1840428"
   ],
   "demo_video": "",
   "demo_url": ""
