@@ -17,6 +17,7 @@ async function main() {
     poolAddress: env.poolAddress,
     provingServiceUrl: env.provingServiceUrl,
     indexerUrl: env.indexerUrl,
+    starkscanProverApiKey: env.starkscanProverApiKey,
   });
 
   const provider = await createPrivacyClient({
@@ -27,6 +28,7 @@ async function main() {
     poolAddress: env.poolAddress,
     provingServiceUrl: env.provingServiceUrl,
     indexerUrl: env.indexerUrl,
+    starkscanProverApiKey: env.starkscanProverApiKey,
   });
 
   const service = new EchoService(10n);

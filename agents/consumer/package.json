@@ -19,7 +19,8 @@
     "demo:networked-devnet": "tsx src/demo-networked-devnet.ts",
     "selfcheck": "tsx src/selfcheck.ts",
     "check:discovery": "tsx src/check-contract-discovery.ts",
-    "serve": "tsx src/session-server.ts"
+    "serve": "tsx src/session-server.ts",
+    "demo:invoke-mainnet": "tsx src/demo-invoke-mainnet.ts"
   },
   "dependencies": {
     "@starkware-libs/starknet-privacy-sdk": "^0.14.3-rc.5",
