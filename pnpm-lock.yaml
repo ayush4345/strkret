@@ -111,15 +111,24 @@ importers:
       '@starknet-io/types-js':
         specifier: 0.10.3
         version: 0.10.3
+      '@starkware-libs/starknet-privacy-sdk':
+        specifier: 0.14.3-rc.5
+        version: 0.14.3-rc.5(typescript@5.9.3)
       '@strkret/agent-core':
         specifier: workspace:*
         version: link:../packages/agent-core
       '@strkret/agent-provider':
         specifier: workspace:*
         version: link:../agents/provider
+      '@strkret/privacy-client':
+        specifier: workspace:*
+        version: link:../packages/privacy-client
       buffer:
         specifier: ^6.0.3
         version: 6.0.3
+      dotenv:
+        specifier: ^16.6.1
+        version: 16.6.1
       next:
         specifier: ^15.0.0
         version: 15.5.25(@types/node@22.20.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)

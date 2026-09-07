@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Buffer } from "buffer";
-import type { PaymentRequirements } from "@strkret/agent-core/voucher";
+import { signVoucher, voucherToWire, type PaymentRequirements } from "@strkret/agent-core/voucher";
 import { RemoteService } from "../lib/remote-service";
 import {
   listWallets,
@@ -154,18 +154,40 @@ export default function Page() {
     setError("");
     setStage("settling");
     try {
-      // This console uses a private transfer. The recorded mainnet run
-      // separately demonstrates the anonymizer's on-chain voucher checks.
-      const { transaction_hash } = await account.strk20InvokeTransaction([settlementAction(owed)]);
-      setSettleTx(transaction_hash);
-      setStage("settled");
+      if (!IS_MAINNET && terms) {
+        // The real anonymizer path: sign the current cumulative total with
+        // the same session key that signed every metered call, then hand it
+        // to our relayer backend. Ready can't relay a private tx invoking a
+        // third-party contract itself (confirmed directly by the STRK20
+        // team), so the relayer — holding its own registered, pre-shielded
+        // account — submits `privacy_invoke` on this voucher's behalf and
+        // pays the settlement fee. The voucher is verified again server-side
+        // before anything moves; see lib/relayer.ts.
+        const voucher = signVoucher(BigInt(terms.channelId), owed, terms.rateCommitment, sessionKeyRef.current);
+        const res = await fetch("/api/relay-settle", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ voucher: voucherToWire(voucher), refundAddress: account.address }),
+        });
+        const data = (await res.json()) as { transactionHash?: string; error?: string };
+        if (!res.ok || !data.transactionHash) throw new Error(data.error || "relay settlement failed");
+        setSettleTx(data.transactionHash);
+        setStage("settled");
+      } else {
+        // Mainnet: no funded relayer escrow yet, so this stays a plain
+        // private transfer — see the "recorded anonymizer path" disclosure
+        // below for where the on-chain enforcement is actually proven.
+        const { transaction_hash } = await account.strk20InvokeTransaction([settlementAction(owed)]);
+        setSettleTx(transaction_hash);
+        setStage("settled");
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setStage("chat");
     } finally {
       setBusy(false);
     }
-  }, [account, owed]);
+  }, [account, owed, terms]);
 
   // See continueAfterShield above — same observed gap between Ready's own
   // UI and the promise it returns to this page.
@@ -394,7 +416,7 @@ export default function Page() {
           <details className="contract-flow">
             <summary><span>Explore the recorded anonymizer path</span><span className="contract-flow__toggle" aria-hidden="true">+</span></summary>
             <div className="contract-flow__body">
-              <p>A separate SDK demo enforces the signed rate and usage on-chain. The visitor console above uses a plain private transfer.</p>
+              <p>{IS_MAINNET ? "A separate SDK demo enforces the signed rate and usage on-chain. This console settles mainnet sessions with a plain private transfer." : "This console settles through exactly this path on Sepolia, via a relayer backend — Ready can shield, deposit and privately transfer, but can't yet relay a private transaction that invokes a third-party contract itself."}</p>
               <div className="flow-route flow-route--three">
                 <div className="flow-node"><span className="flow-node-label">Inputs</span><h4>Voucher + escrow</h4><p>Signed cumulative usage and shielded funds.</p></div>
                 <div className="flow-connector"><span>Pool releases escrow</span><i aria-hidden="true">→</i></div>
