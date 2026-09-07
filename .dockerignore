@@ -1,0 +1,14 @@
+.git
+.agents
+.codex
+.beads
+.env*
+**/.env*
+.npmrc
+**/.npmrc
+**/node_modules
+**/dist
+**/.next
+**/target
+**/*.tsbuildinfo
+docs/DEMO-SCRIPT.md
