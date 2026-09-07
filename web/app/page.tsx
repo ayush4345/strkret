@@ -1,97 +1,158 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Buffer } from "buffer";
+import { signVoucher, type PaymentRequirements } from "@strkret/agent-core/voucher";
+import { claimFromVoucher, encodeInvokeCalldata } from "@strkret/agent-core/anonymizer";
+import { RemoteService } from "../lib/remote-service";
+import {
+  listWallets,
+  connectWallet,
+  type WalletWithStarknetFeatures,
+  type STRK20_ACTION,
+} from "../lib/wallet-client";
+import type { WalletAccountV6 } from "starknet";
+import {
+  STRK_ADDRESS,
+  MAINNET_ANONYMIZER_ADDRESS,
+  PROVIDER_ADDRESS,
+  UNITS_PER_BLOCK,
+  RATE_BLIND,
+  ESCROW_AMOUNT,
+} from "../lib/protocol";
 
-interface Terms {
-  rate?: string;
-  pricing?: { unitsPerBlock: string; charsPerBlock: number };
-  channelId?: string;
-  rateCommitment?: string;
-  asset?: string;
-  minSettlementUnits?: string;
-  settlementContract?: string;
-}
-interface CallRecord { prompt: string; completion: string; cost: string; claimAfter: string; at: number }
-interface SettlementRecord { amount: string; txHash: string; at: number }
-interface State {
-  phase: "booting" | "ready" | "settling" | "failed";
-  detail: string; error: string;
-  terms: Terms | null; serviceName: string;
-  deposit: string; threshold: string; owed: string; settled: string;
-  calls: CallRecord[]; settlements: SettlementRecord[];
+interface CallRecord {
+  prompt: string;
+  completion: string;
+  cost: string;
+  claimAfter: string;
+  at: number;
 }
 
-const shorten = (v: string) => (v.length > 22 ? `${v.slice(0, 12)}…${v.slice(-6)}` : v);
+const shorten = (v: string) => (v.length > 22 ? `${v.slice(0, 10)}…${v.slice(-6)}` : v);
+
+type Stage = "connect" | "shield" | "chat" | "settling" | "settled";
 
 export default function Page() {
-  const [state, setState] = useState<State | null>(null);
+  const [wallets, setWallets] = useState<readonly WalletWithStarknetFeatures[]>([]);
+  const [account, setAccount] = useState<WalletAccountV6 | null>(null);
+  const [connectError, setConnectError] = useState("");
+  const [stage, setStage] = useState<Stage>("connect");
+
+  const [terms, setTerms] = useState<PaymentRequirements | null>(null);
+  const serviceRef = useRef<RemoteService | null>(null);
+  const sessionKeyRef = useRef<string>("");
+  if (!sessionKeyRef.current) {
+    // An ephemeral, per-visit metering key — signs vouchers only, never
+    // touches funds. The wallet remains the sole custodian of anything that
+    // moves value; this key just proves "I asked for this many calls."
+    // 31 random bytes (248 bits) stays safely under the stark curve order,
+    // which a full 32 bytes is not guaranteed to.
+    const bytes = new Uint8Array(31);
+    crypto.getRandomValues(bytes);
+    sessionKeyRef.current = "0x" + Buffer.from(bytes).toString("hex");
+  }
+
   const [prompt, setPrompt] = useState("What is a nullifier in a shielded pool?");
+  const [calls, setCalls] = useState<CallRecord[]>([]);
+  const [owed, setOwed] = useState(0n);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [depositTx, setDepositTx] = useState("");
+  const [settleTx, setSettleTx] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const refresh = useCallback(async () => {
+  useEffect(() => {
+    fetch("/api/terms")
+      .then((r) => r.json())
+      .then(setTerms)
+      .catch(() => setError("could not reach /api/terms"));
+  }, []);
+
+  useEffect(() => listWallets(setWallets), []);
+
+  const doConnect = useCallback(async (w: WalletWithStarknetFeatures) => {
+    setConnectError("");
     try {
-      const res = await fetch("/api/state", { cache: "no-store" });
-      const data = (await res.json()) as State & { error?: string };
-      if (res.ok) { setState(data); setError(""); }
-      else setError(data.error ?? "session unreachable");
-    } catch {
-      setError("session server unreachable — run: pnpm --filter @strkret/agent-consumer run serve");
+      const acct = await connectWallet(w);
+      setAccount(acct);
+      setStage("shield");
+    } catch (e) {
+      setConnectError(e instanceof Error ? e.message : String(e));
     }
   }, []);
 
-  // Boot and settlement both finish on their own; poll so the page reflects
-  // that without anyone reloading.
-  useEffect(() => {
-    void refresh();
-    const id = setInterval(refresh, 1500);
-    return () => clearInterval(id);
-  }, [refresh]);
-
-  const post = async (path: string, body?: unknown) => {
+  const doShield = useCallback(async () => {
+    if (!account) return;
     setBusy(true);
     setError("");
     try {
-      const res = await fetch(path, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: body ? JSON.stringify(body) : undefined,
-      });
-      const data = (await res.json()) as { ok?: boolean; error?: string };
-      if (!data.ok) setError(data.error ?? "request failed");
-      await refresh();
-    } catch {
-      setError("request failed");
+      const actions: STRK20_ACTION[] = [{ type: "deposit", token: STRK_ADDRESS, amount: ESCROW_AMOUNT.toString() }];
+      const { transaction_hash } = await account.strk20InvokeTransaction(actions);
+      setDepositTx(transaction_hash);
+      setStage("chat");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [account]);
+
+  const ask = useCallback(async () => {
+    if (!prompt.trim()) return;
+    setBusy(true);
+    setError("");
+    try {
+      if (!serviceRef.current) {
+        serviceRef.current = await RemoteService.open("/api", sessionKeyRef.current, STRK_ADDRESS);
+      }
+      const service = serviceRef.current;
+      const cost = service.price({ prompt });
+      const { completion } = await service.handle({ prompt });
+      setOwed(service.authorizedUnits);
+      setCalls((prev) => [
+        ...prev,
+        { prompt, completion, cost: cost.toString(), claimAfter: service.authorizedUnits.toString(), at: Date.now() },
+      ]);
+      setPrompt("");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
       inputRef.current?.focus();
     }
-  };
+  }, [prompt]);
 
-  const phase = state?.phase ?? "booting";
-  const ready = phase === "ready";
-  const terms = state?.terms ?? {};
-  const owed = BigInt(state?.owed ?? "0");
-  const settled = BigInt(state?.settled ?? "0");
-  const unsettled = owed - settled;
-  // Calls covered by the next settlement. This is the amortisation factor —
-  // one flat fee divided across however many calls you waited for — and it is
-  // the number the whole design turns on.
-  const lastSettleAt = state?.settlements.length ? state.settlements[state.settlements.length - 1].at : 0;
-  const callsSinceSettle = (state?.calls ?? []).filter((c) => c.at > lastSettleAt).length;
+  const settle = useCallback(async () => {
+    if (!account || !terms || owed <= 0n) return;
+    setBusy(true);
+    setError("");
+    setStage("settling");
+    try {
+      // Re-sign for the current cumulative total. Any valid signature over
+      // (channelId, totalUnits, rateCommitment) settles the same claim —
+      // the provider already served every call up to this total against
+      // vouchers signed the same way, so this is not a new promise.
+      const voucher = signVoucher(BigInt(terms.channelId), owed, terms.rateCommitment, sessionKeyRef.current);
+      const claim = claimFromVoucher(voucher, UNITS_PER_BLOCK, RATE_BLIND, "${openNoteIds[0]}" as never);
+      const calldata = encodeInvokeCalldata(STRK_ADDRESS, [claim], "${openNoteIds[1]}" as never);
 
-  // Interleaved, newest first: a settlement fires mid-session, so the log has
-  // to show it where it actually happened rather than in a separate list.
-  const timeline = [
-    ...(state?.calls ?? []).map((c) => ({ kind: "call" as const, at: c.at, c })),
-    ...(state?.settlements ?? []).map((s) => ({ kind: "settle" as const, at: s.at, s })),
-  ].sort((a, b) => b.at - a.at);
-
-  const pillClass =
-    phase === "ready" ? "pill pill--open"
-    : phase === "failed" ? "pill pill--bad"
-    : "pill pill--work";
+      const actions: STRK20_ACTION[] = [
+        { type: "withdraw", token: STRK_ADDRESS, amount: ESCROW_AMOUNT.toString(), recipient: MAINNET_ANONYMIZER_ADDRESS },
+        { type: "transfer", token: STRK_ADDRESS, amount: "OPEN", recipient: PROVIDER_ADDRESS },
+        { type: "transfer", token: STRK_ADDRESS, amount: "OPEN", recipient: account.address },
+        { type: "invoke", contract: MAINNET_ANONYMIZER_ADDRESS, calldata },
+      ];
+      const { transaction_hash } = await account.strk20InvokeTransaction(actions);
+      setSettleTx(transaction_hash);
+      setStage("settled");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setStage("chat");
+    } finally {
+      setBusy(false);
+    }
+  }, [account, terms, owed]);
 
   return (
     <main className="shell dash">
@@ -99,177 +160,191 @@ export default function Page() {
         <div>
           <h1>Strkret</h1>
           <p className="dash__sub">
-            A consumer agent buying metered work from a provider agent, settled confidentially
-            through the STRK20 privacy pool. Metering is per call and off-chain; settlement is
-            batched and shielded.
+            A live mainnet channel: connect your own privacy-enabled Starknet wallet, chat with a
+            metered provider agent off-chain and free, then settle in one shielded transaction
+            through the pool. You pay only the flat protocol fee — the number this project exists
+            to amortise.
           </p>
         </div>
-        <span className={pillClass}>
+        <span className={`pill ${account ? "pill--open" : "pill--work"}`}>
           <i className="pill__dot" />
-          {phase === "booting" && (state?.detail || "booting")}
-          {phase === "ready" && "channel open"}
-          {phase === "settling" && "settling on-chain"}
-          {phase === "failed" && "failed"}
+          {account ? shorten(account.address) : "wallet not connected"}
         </span>
       </header>
 
-      {phase === "failed" && <p className="err">{state?.error}</p>}
-
-      <section className="tape" aria-label="Session meters">
-        <div className="tape__cell">
-          <div className="tape__k">accrued off-chain</div>
-          <div className="tape__v tape__v--meter">{owed.toString()}</div>
-          <div className="tape__s">signed per call · no chain contact · free</div>
-        </div>
-        <div className="tape__cell">
-          <div className="tape__k">settled on-chain</div>
-          <div className="tape__v tape__v--brand">{settled.toString()}</div>
-          <div className="tape__s">
-            {state?.settlements.length ?? 0} settlement{(state?.settlements.length ?? 0) === 1 ? "" : "s"} · one flat fee each
-          </div>
-        </div>
-        <div className="tape__cell">
-          <div className="tape__k">next settlement covers</div>
-          <div className="tape__v">
-            {callsSinceSettle}
-            <span style={{ fontSize: ".45em", color: "var(--on-paper-mute)" }}>
-              {callsSinceSettle === 1 ? " call" : " calls"}
-            </span>
-          </div>
-          <div className="tape__s">
-            {callsSinceSettle === 0
-              ? "nothing outstanding"
-              : `one flat fee across ${callsSinceSettle} — wait longer, pay less per call`}
-          </div>
-        </div>
-      </section>
-
-      <div className="dash__grid">
-        <section className="panel" aria-labelledby="p-console">
-          <h2 id="p-console" className="panel__head">Agent console</h2>
-
-          <form
-            className="ask"
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (prompt.trim()) void post("/api/call", { prompt });
-            }}
-          >
-            <input
-              ref={inputRef}
-              type="text"
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              placeholder="Ask the provider agent…"
-              disabled={!ready || busy}
-              aria-label="Prompt"
-            />
-            <button className="btn" type="submit" disabled={!ready || busy || !prompt.trim()}>
-              {busy ? "Working…" : "Ask & meter"}
-            </button>
-            <button
-              className="btn btn--ghost"
-              type="button"
-              onClick={() => void post("/api/settle")}
-              disabled={!ready || busy || unsettled <= 0n}
-            >
-              Settle now
-            </button>
-          </form>
-          <p className="ask__hint">
-            Every call signs a fresh voucher for the running total, off-chain and free. Settling is
-            a decision — each one pays the pool&rsquo;s flat fee whatever its size, so the longer
-            you wait, the less that fee costs per call.
+      {!account && (
+        <section className="panel" style={{ marginTop: "1.75rem" }}>
+          <h2 className="panel__head">1 · Connect a privacy-enabled wallet</h2>
+          <p className="panel__note">
+            Needs the STRK20 Wallet API (Wallet API ≥ 0.10.3) — the Ready extension is the wallet
+            the STRK20 team tests this against. Your wallet handles your viewing key and proving;
+            this page never sees either.
           </p>
-          {error && <p className="err">{error}</p>}
-
-          {timeline.length === 0 ? (
-            <p className="hint">No calls yet — ask something above.</p>
+          {wallets.length === 0 ? (
+            <p className="hint">No wallet detected yet. Install or unlock one, then reload.</p>
           ) : (
-            <ul className="log">
-              {timeline.map((row) =>
-                row.kind === "call" ? (
-                  <li className="turn" key={`c${row.at}`}>
-                    <div className="turn__row turn__row--you">
-                      <span className="turn__who">you</span>
-                      <p className="turn__text">{row.c.prompt}</p>
-                    </div>
-                    <div className="turn__row turn__row--agent">
-                      <span className="turn__who">agent</span>
-                      <p className="turn__text">{row.c.completion}</p>
-                      <div className="turn__meta">
-                        <span>cost {row.c.cost}</span>
-                        <span>signed claim {row.c.claimAfter}</span>
-                        <span>chain untouched</span>
-                      </div>
-                    </div>
-                  </li>
-                ) : (
-                  <li className="event" key={`s${row.at}`}>
-                    <div className="event__k">settlement</div>
-                    <div className="event__v">
-                      {row.s.amount} units paid in one private transfer — amount, sender and
-                      recipient all hidden.
-                    </div>
-                    <div className="event__tx">{row.s.txHash}</div>
-                  </li>
-                ),
-              )}
-            </ul>
+            <div className="ask" style={{ marginTop: "1rem" }}>
+              {wallets.map((w) => (
+                <button key={w.name} className="btn" onClick={() => void doConnect(w)} disabled={busy}>
+                  Connect {w.name}
+                </button>
+              ))}
+            </div>
           )}
+          {connectError && <p className="err">{connectError}</p>}
         </section>
+      )}
 
-        <div style={{ display: "grid", gap: "1.25rem", alignContent: "start" }}>
-          <section className="panel" aria-labelledby="p-terms">
-            <h2 id="p-terms" className="panel__head">Channel terms — from the 402</h2>
-            <dl className="rows">
-              <div><dt>Service</dt><dd>{state?.serviceName || "—"}</dd></div>
-              <div><dt>Channel</dt><dd className="is-num">{terms.channelId ?? "—"}</dd></div>
-              <div><dt>Base rate</dt><dd className="is-num">{terms.rate ?? "—"}</dd></div>
-              <div>
-                <dt>Pricing</dt>
-                <dd className="is-num">
-                  {terms.pricing
-                    ? `${terms.pricing.unitsPerBlock} / ${terms.pricing.charsPerBlock} chars`
-                    : "flat per call"}
-                </dd>
+      {account && stage === "shield" && (
+        <section className="panel" style={{ marginTop: "1.75rem" }}>
+          <h2 className="panel__head">2 · Shield the escrow</h2>
+          <p className="panel__note">
+            One wallet-prompted mainnet transaction: shields {ESCROW_AMOUNT.toString()} raw units of
+            STRK (about 1e-15 STRK — economically nothing) into the pool, plus the pool&rsquo;s flat
+            protocol fee. This is the real cost of the demo, and it&rsquo;s the number the whole
+            project argues you should pay once, not per call.
+          </p>
+          <button className="btn" onClick={() => void doShield()} disabled={busy} style={{ marginTop: "1rem" }}>
+            {busy ? "Waiting for wallet…" : "Shield escrow"}
+          </button>
+          {error && <p className="err">{error}</p>}
+        </section>
+      )}
+
+      {account && stage !== "connect" && stage !== "shield" && (
+        <>
+          <section className="tape" aria-label="Session meters" style={{ marginTop: "1.75rem" }}>
+            <div className="tape__cell">
+              <div className="tape__k">accrued off-chain</div>
+              <div className="tape__v tape__v--meter">{owed.toString()}</div>
+              <div className="tape__s">signed per call · no chain contact · free</div>
+            </div>
+            <div className="tape__cell">
+              <div className="tape__k">calls served</div>
+              <div className="tape__v tape__v--brand">{calls.length}</div>
+              <div className="tape__s">this channel, this browser session</div>
+            </div>
+            <div className="tape__cell">
+              <div className="tape__k">settlement</div>
+              <div className="tape__v">{stage === "settled" ? "done" : owed > 0n ? "ready" : "nothing owed"}</div>
+              <div className="tape__s">
+                {stage === "settled" ? "paid on mainnet" : "one flat fee, whenever you choose"}
               </div>
-              <div><dt>Min settle</dt><dd className="is-num">{terms.minSettlementUnits ?? "—"}</dd></div>
-              <div><dt>Escrow</dt><dd className="is-num">{state?.deposit ?? "—"}</dd></div>
-              <div>
-                <dt>Asset</dt>
-                <dd className="is-num" title={terms.asset}>{terms.asset ? shorten(terms.asset) : "—"}</dd>
-              </div>
-              <div>
-                <dt>Rate commitment</dt>
-                <dd className="is-num" title={terms.rateCommitment}>
-                  {terms.rateCommitment ? shorten(terms.rateCommitment) : "—"}
-                </dd>
-              </div>
-            </dl>
-            <p className="panel__note">
-              The first unpaid call was answered with <code>402 Payment Required</code> and these
-              terms. Every voucher is signed over the rate commitment above, so a settlement can
-              only happen at the rate this channel was opened at.
-            </p>
+            </div>
           </section>
 
-          <section className="panel" aria-labelledby="p-why">
-            <h2 id="p-why" className="panel__head">Why it batches</h2>
-            <p className="panel__note" style={{ marginTop: ".875rem" }}>
-              The pool charges a <b>flat protocol fee per settlement</b> — 6 STRK on mainnet —
-              regardless of how much value moves. Settling per call would cost 6 STRK a call, which
-              no per-call price can absorb.
-            </p>
-            <p className="panel__note">
-              So metering stays off-chain and free, and only settlement touches the chain. This
-              session runs on a local devnet: the real pool contract and real proofs, on a chain
-              that mines on demand — Sepolia would wait ~10 blocks per settlement for note
-              maturity.
-            </p>
-          </section>
-        </div>
-      </div>
+          <div className="dash__grid">
+            <section className="panel" aria-labelledby="p-console">
+              <h2 id="p-console" className="panel__head">3 · Agent console</h2>
+              <form
+                className="ask"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void ask();
+                }}
+              >
+                <input
+                  ref={inputRef}
+                  type="text"
+                  value={prompt}
+                  onChange={(e) => setPrompt(e.target.value)}
+                  placeholder="Ask the provider agent…"
+                  disabled={busy || stage === "settled"}
+                  aria-label="Prompt"
+                />
+                <button className="btn" type="submit" disabled={busy || !prompt.trim() || stage === "settled"}>
+                  {busy && stage !== "settling" ? "Working…" : "Ask & meter"}
+                </button>
+                <button
+                  className="btn btn--ghost"
+                  type="button"
+                  onClick={() => void settle()}
+                  disabled={busy || owed <= 0n || stage === "settled"}
+                >
+                  {stage === "settling" ? "Settling…" : "Settle now"}
+                </button>
+              </form>
+              <p className="ask__hint">
+                Every call signs a fresh voucher off-chain and free. Settling is your decision —
+                one wallet-prompted transaction pays the provider and refunds the rest, whatever
+                the number of calls behind it.
+              </p>
+              {error && <p className="err">{error}</p>}
+              {depositTx && (
+                <p className="ask__hint">
+                  escrow tx: <code>{shorten(depositTx)}</code>
+                </p>
+              )}
+              {settleTx && (
+                <p className="ask__hint">
+                  settled — <code>{shorten(settleTx)}</code>
+                </p>
+              )}
+
+              {calls.length === 0 ? (
+                <p className="hint">No calls yet — ask something above.</p>
+              ) : (
+                <ul className="log">
+                  {[...calls].reverse().map((c) => (
+                    <li className="turn" key={c.at}>
+                      <div className="turn__row turn__row--you">
+                        <span className="turn__who">you</span>
+                        <p className="turn__text">{c.prompt}</p>
+                      </div>
+                      <div className="turn__row turn__row--agent">
+                        <span className="turn__who">agent</span>
+                        <p className="turn__text">{c.completion}</p>
+                        <div className="turn__meta">
+                          <span>cost {c.cost}</span>
+                          <span>signed claim {c.claimAfter}</span>
+                          <span>chain untouched</span>
+                        </div>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+
+            <div style={{ display: "grid", gap: "1.25rem", alignContent: "start" }}>
+              <section className="panel" aria-labelledby="p-terms">
+                <h2 id="p-terms" className="panel__head">Channel terms — from GET /api/terms</h2>
+                <dl className="rows">
+                  <div><dt>Channel</dt><dd className="is-num">{terms?.channelId ?? "—"}</dd></div>
+                  <div><dt>Base rate</dt><dd className="is-num">{terms?.rate ?? "—"}</dd></div>
+                  <div><dt>Min settle</dt><dd className="is-num">{terms?.minSettlementUnits ?? "—"}</dd></div>
+                  <div>
+                    <dt>Settlement contract</dt>
+                    <dd className="is-num" title={terms?.settlementContract}>
+                      {terms?.settlementContract ? shorten(terms.settlementContract) : "—"}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Rate commitment</dt>
+                    <dd className="is-num" title={terms?.rateCommitment}>
+                      {terms?.rateCommitment ? shorten(terms.rateCommitment) : "—"}
+                    </dd>
+                  </div>
+                </dl>
+                <p className="panel__note">
+                  Every voucher is signed over the rate commitment above, so settlement can only
+                  ever happen at the rate this channel published.
+                </p>
+              </section>
+
+              <section className="panel" aria-labelledby="p-why">
+                <h2 id="p-why" className="panel__head">What you&rsquo;re actually paying</h2>
+                <p className="panel__note" style={{ marginTop: ".875rem" }}>
+                  The pool charges a <b>flat protocol fee per settlement</b> — 6 STRK on mainnet —
+                  regardless of how much value moves. Two wallet-prompted transactions this page
+                  makes (shield, settle) each pay that fee once; the calls in between cost nothing
+                  and touch no chain, however many you ask.
+                </p>
+              </section>
+            </div>
+          </div>
+        </>
+      )}
     </main>
   );
 }

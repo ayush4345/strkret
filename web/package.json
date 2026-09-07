@@ -8,9 +8,17 @@
     "start": "next start -p 3100"
   },
   "dependencies": {
+    "@starknet-io/get-starknet-discovery": "6.0.3",
+    "@starknet-io/get-starknet-wallet-standard": "6.0.3",
+    "@starknet-io/types-js": "0.10.3",
+    "@strkret/agent-core": "workspace:*",
+    "@strkret/agent-provider": "workspace:*",
+    "buffer": "^6.0.3",
     "next": "^15.0.0",
+    "openai": "^4.104.0",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "starknet": "10.5.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

@@ -9,6 +9,14 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./voucher": {
+      "types": "./dist/voucher.d.ts",
+      "default": "./dist/voucher.js"
+    },
+    "./anonymizer": {
+      "types": "./dist/anonymizer.d.ts",
+      "default": "./dist/anonymizer.js"
     }
   },
   "files": [
