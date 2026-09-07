@@ -57,4 +57,13 @@ export async function connectWallet(wallet: WalletWithStarknetFeatures): Promise
   return withTimeout(WalletAccountV6.connect(provider, wallet as never), 30_000, "Wallet connect");
 }
 
+/** The wallet decrypts and reports this — no viewing key ever reaches this
+ * page. Triggers a wallet consent prompt for balance access, so call it
+ * only as a deliberate "check my balance" action, not on every render. */
+export async function shieldedBalance(account: WalletAccountV6, token: string): Promise<bigint> {
+  const entries = await withTimeout(account.strk20Balances([token]), 30_000, "Balance check");
+  const entry = entries.find((e) => BigInt(e.token) === BigInt(token));
+  return entry ? BigInt(entry.balance) : 0n;
+}
+
 export type { STRK20_ACTION };

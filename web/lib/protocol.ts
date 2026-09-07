@@ -93,6 +93,13 @@ export const settlementAction = (unitCount: bigint): STRK20_ACTION => ({
   type: "transfer", token: num.toHex(STRK_ADDRESS), amount: num.toHex(unitCount * RATE), recipient: num.toHex(PROVIDER_ADDRESS),
 });
 
+/** Unshields `amount` back to `recipient`'s own public balance — the same
+ * kind of basic, wallet-native action as shield/settle above (no
+ * third-party contract call), so it should relay the same way. */
+export const withdrawAction = (amount: bigint, recipient: string): STRK20_ACTION => ({
+  type: "withdraw", token: num.toHex(STRK_ADDRESS), amount: num.toHex(amount), recipient: num.toHex(recipient),
+});
+
 /** Both endpoints publish the settlement RATE bound by RATE_COMMITMENT.
  * Required `pricing` describes usage counts independently of token amounts. */
 export function buildTerms(pricing: { unitsPerBlock: string; charsPerBlock: number }): {

@@ -7,10 +7,11 @@ import { RemoteService } from "../lib/remote-service";
 import {
   listWallets,
   connectWallet,
+  shieldedBalance,
   type WalletWithStarknetFeatures,
 } from "../lib/wallet-client";
 import type { WalletAccountV6 } from "starknet";
-import { STRK_ADDRESS, ESCROW_AMOUNT, IS_MAINNET, formatStrk, shieldAction, settlementAction } from "../lib/protocol";
+import { STRK_ADDRESS, ESCROW_AMOUNT, IS_MAINNET, formatStrk, shieldAction, settlementAction, withdrawAction } from "../lib/protocol";
 
 interface CallRecord {
   prompt: string;
@@ -51,6 +52,8 @@ export default function Page() {
   const [error, setError] = useState("");
   const [depositTx, setDepositTx] = useState("");
   const [settleTx, setSettleTx] = useState("");
+  const [shieldedBal, setShieldedBal] = useState<bigint | null>(null);
+  const [withdrawTx, setWithdrawTx] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -197,6 +200,42 @@ export default function Page() {
     setBusy(false);
   }, []);
 
+  const checkBalance = useCallback(async () => {
+    if (!account) return;
+    setBusy(true);
+    setError("");
+    try {
+      setShieldedBal(await shieldedBalance(account, STRK_ADDRESS));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [account]);
+
+  const withdrawRemaining = useCallback(async () => {
+    if (!account) return;
+    setBusy(true);
+    setError("");
+    try {
+      // Always fetch fresh — don't withdraw against a balance read before
+      // this session's own settle changed it.
+      const bal = await shieldedBalance(account, STRK_ADDRESS);
+      setShieldedBal(bal);
+      if (bal <= 0n) {
+        setError("nothing shielded to withdraw");
+        return;
+      }
+      const { transaction_hash } = await account.strk20InvokeTransaction([withdrawAction(bal, account.address)]);
+      setWithdrawTx(transaction_hash);
+      setShieldedBal(0n);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [account]);
+
   const sessionOpen = account && stage !== "connect" && stage !== "shield";
   const activeStep = !account ? 0 : stage === "shield" ? 1 : stage === "chat" ? 2 : 3;
   const explorer = IS_MAINNET ? "https://voyager.online" : "https://sepolia.voyager.online";
@@ -341,9 +380,28 @@ export default function Page() {
                       <p className="fine-print">{IS_MAINNET ? "Before settling, wait for the deposit to confirm and its notes to mature (about 10 blocks). Keep enough funds for the pool fee. Unused funds remain shielded." : "On Sepolia, the relayer funds the payout and pool fee. Your shielded deposit stays untouched; the relayer’s escrow remainder is credited to your wallet."}</p>
                       {(depositTx || settleTx) && (
                         <div className="receipts" aria-label="Transactions">
-                          {[["Deposit", depositTx], ["Settlement", settleTx]].filter(([, tx]) => tx).map(([label, tx]) => (
+                          {[["Deposit", depositTx], ["Settlement", settleTx], ["Withdrawal", withdrawTx]].filter(([, tx]) => tx).map(([label, tx]) => (
                             <p key={label}><span>{label}</span>{tx.startsWith("0x") ? <a href={`${explorer}/tx/${tx}`} target="_blank" rel="noreferrer">{shorten(tx)} ↗</a> : <span>{tx}</span>}</p>
                           ))}
+                        </div>
+                      )}
+                      {stage === "settled" && (
+                        <div className="settlement-controls">
+                          <p>
+                            {shieldedBal === null
+                              ? "Any unused shielded balance stays private and yours — nothing else to do unless you want it back as ordinary public STRK."
+                              : `Shielded balance: ${formatStrk(shieldedBal)} STRK.`}
+                          </p>
+                          {shieldedBal === null || shieldedBal > 0n ? (
+                            <button className="btn btn--ghost" type="button" onClick={() => void checkBalance()} disabled={busy}>
+                              Check shielded balance<span aria-hidden="true">↗</span>
+                            </button>
+                          ) : null}
+                          {shieldedBal !== null && shieldedBal > 0n && (
+                            <button className="btn btn--ghost" type="button" onClick={() => void withdrawRemaining()} disabled={busy}>
+                              Withdraw to public balance<span aria-hidden="true">↗</span>
+                            </button>
+                          )}
                         </div>
                       )}
                     </div>
