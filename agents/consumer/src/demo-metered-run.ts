@@ -1,6 +1,7 @@
 /**
- * The submission run: the anonymizer settlement path against Starknet
- * mainnet, producing the transaction hashes for `strk20.json`.
+ * The submission run: meter a real session, then settle it once through the
+ * anonymizer. Works on either network — it reads which from `.env` and
+ * adapts, because the two differ in ways that matter (see below).
  *
  * This exercises the contract deployed at
  * 0x050d3089d17b8552460a9e4b36f5ed95d991493f5f3efaf66d79769cd1840428 —
@@ -48,8 +49,14 @@ import { MeteredSession, claimFromVoucher, encodeInvokeCalldata, signVoucher } f
 import { RemoteEchoService } from "./remote-echo-service.js";
 import { env } from "./env.js";
 
-const ANONYMIZER_ADDRESS = "0x050d3089d17b8552460a9e4b36f5ed95d991493f5f3efaf66d79769cd1840428";
 const MAINNET_POOL = "0x040337b1af3c663e86e333bab5a4b28da8d4652a15a69beee2b677776ffe812a";
+const MAINNET_ANONYMIZER = "0x050d3089d17b8552460a9e4b36f5ed95d991493f5f3efaf66d79769cd1840428";
+const SEPOLIA_ANONYMIZER = "0x04ca3501bfbc7c6efb292d26ca39f04d3914e61608ecee9aef84fab33312372b";
+
+/** Same contract code on both networks; only the instance differs. */
+const IS_MAINNET = BigInt(env.poolAddress) === BigInt(MAINNET_POOL);
+const ANONYMIZER_ADDRESS =
+  process.env.ANONYMIZER_ADDRESS ?? (IS_MAINNET ? MAINNET_ANONYMIZER : SEPOLIA_ANONYMIZER);
 const PROVIDER_PORT = 4031;
 const PROVIDER_URL = `http://localhost:${PROVIDER_PORT}`;
 const providerDir = resolve(dirname(fileURLToPath(import.meta.url)), "../../provider");
@@ -63,6 +70,10 @@ const providerDir = resolve(dirname(fileURLToPath(import.meta.url)), "../../prov
  * though submission itself does. The only node that estimates these
  * correctly refuses to submit at all.
  *
+ * Mainnet only. Sepolia's hosted node carries the proof extension through
+ * its estimate path, so estimating there is both correct and safer than a
+ * guessed ceiling.
+ *
  * Sized from a real observed estimate (~128M l2 gas at ~42.5 gfri) with
  * headroom, and deliberately not more: the account has to cover its own
  * bound, so an over-generous reservation fails validation as surely as a
@@ -72,13 +83,14 @@ const providerDir = resolve(dirname(fileURLToPath(import.meta.url)), "../../prov
  * transfer under the allowance approved earlier, so it sits outside these
  * bounds entirely.
  */
-const BOUNDS = {
+const BOUNDS_MAINNET = {
   // A zero max_price is rejected even when max_amount is zero: the ceiling is
   // compared against the live gas price regardless of how little is used.
   l1_gas: { max_amount: 100n, max_price_per_unit: 300_000_000_000_000n },
   l2_gas: { max_amount: 130_000_000n, max_price_per_unit: 50_000_000_000n },
   l1_data_gas: { max_amount: 20_000n, max_price_per_unit: 5_000_000_000_000n },
 };
+const BOUNDS = IS_MAINNET ? BOUNDS_MAINNET : undefined;
 
 /** Questions to actually buy. Enough that one settlement covers real work. */
 const PROMPTS = [
@@ -142,12 +154,11 @@ async function approve(c: Client, amount: bigint, label: string): Promise<void> 
 }
 
 async function main() {
-  if (BigInt(env.poolAddress) !== BigInt(MAINNET_POOL)) {
-    throw new Error(`.env POOL_ADDRESS is not the mainnet pool — refusing to run:\n  ${env.poolAddress}`);
-  }
-  if (!env.starkscanProverApiKey) {
+  if (IS_MAINNET && !env.starkscanProverApiKey) {
     throw new Error("STARKSCAN_PROVER_KEY is required on mainnet (the prover is a REST relay)");
   }
+  console.log(`network: ${IS_MAINNET ? "MAINNET — real funds" : "Sepolia"}`);
+  console.log(`anonymizer: ${ANONYMIZER_ADDRESS}`);
 
   const consumer = await client("consumer");
   const provider = await client("provider");
@@ -164,7 +175,9 @@ async function main() {
   // publishes, since the voucher is signed over its commitment.
   const rate = 1n;
   const rateBlind = 42n;
-  const channelId = 7n;
+  // The mark persists on-chain per (consumer, channel), so a rerun needs a
+  // channel this consumer has not settled on before.
+  const channelId = BigInt(process.env.CHANNEL_ID ?? 7);
 
   // --- 1. Provider publishes its viewing key. Nobody can do this for it,
   // and without it there is no channel to credit. ---
@@ -199,11 +212,17 @@ async function main() {
 
   console.log("\n[1/4] provider register");
   await approve(provider, feeBuffer, "provider");
-  const regBlock = await provider.provingBlockId();
-  const regBuild = await provider.transfers.build().register().execute({ provingBlockId: regBlock });
-  const regHash = await provider.submit(regBuild.callAndProof, BOUNDS);
-  txHashes.push({ step: "provider register", hash: regHash });
-  console.log(`  registered: ${regHash}`);
+  // Re-registering a viewing key reverts with NON_ZERO_VALUE; on a rerun the
+  // provider is already registered and that is fine.
+  try {
+    const regBlock = await provider.provingBlockId();
+    const regBuild = await provider.transfers.build().register().execute({ provingBlockId: regBlock });
+    const regHash = await provider.submit(regBuild.callAndProof, BOUNDS);
+    txHashes.push({ step: "provider register", hash: regHash });
+    console.log(`  registered: ${regHash}`);
+  } catch (err) {
+    console.log(`  register skipped (already registered): ${(err as Error).message.slice(0, 120)}`);
+  }
 
   // --- 2. Consumer shields the escrow, bundling its own registration. ---
   console.log("\n[2/4] consumer deposit");
