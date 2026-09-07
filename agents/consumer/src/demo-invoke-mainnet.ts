@@ -16,6 +16,20 @@
  * per `apply_actions` regardless of how little moves, so this run costs
  * about 12 STRK on the consumer and 6 on the provider.
  *
+ * ## It meters a real session first
+ *
+ * Twelve calls are served and signed for before anything settles. Settling
+ * after one or two would produce the transaction hashes just as well and
+ * demonstrate the opposite of the argument — the whole claim is that a flat
+ * per-settlement fee is amortised across many off-chain calls, and a run that
+ * settles immediately pays the same fee for one call.
+ *
+ * The provider is priced at 1 unit per block for this run, and that is not
+ * cosmetic: a voucher's `total_units` is a COUNT the contract multiplies by
+ * `rate`, while the metering layer accumulates `price()`. Unless a unit costs
+ * exactly `rate`, settling a metered voucher multiplies twice. At 1 they are
+ * the same number.
+ *
  * ## Run it deliberately
  *
  * Starkscan's prover is pilot-phase at 10 proofs a day and each step needs
@@ -23,17 +37,64 @@
  * Check `.env` points at mainnet before starting, and read the output rather
  * than re-running on a whim.
  */
-import { writeFileSync } from "node:fs";
+import { spawn, type ChildProcess } from "node:child_process";
+import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { hash } from "starknet";
 import { Open } from "@starkware-libs/starknet-privacy-sdk";
 import { createPoolContract, createPrivacyClient } from "@strkret/privacy-client";
-import { claimFromVoucher, encodeInvokeCalldata, signVoucher } from "@strkret/agent-core";
+import { MeteredSession, claimFromVoucher, encodeInvokeCalldata, signVoucher } from "@strkret/agent-core";
+import { RemoteEchoService } from "./remote-echo-service.js";
 import { env } from "./env.js";
 
 const ANONYMIZER_ADDRESS = "0x050d3089d17b8552460a9e4b36f5ed95d991493f5f3efaf66d79769cd1840428";
 const MAINNET_POOL = "0x040337b1af3c663e86e333bab5a4b28da8d4652a15a69beee2b677776ffe812a";
+const PROVIDER_PORT = 4031;
+const PROVIDER_URL = `http://localhost:${PROVIDER_PORT}`;
+const providerDir = resolve(dirname(fileURLToPath(import.meta.url)), "../../provider");
+
+/**
+ * Explicit bounds, so starknet.js skips fee estimation.
+ *
+ * Estimation is a separate RPC round trip, and the node that can actually
+ * submit transactions on mainnet rejects the estimate as EMPTY_PROOF_FACTS —
+ * it does not carry the STRK20 proof extension through that path, even
+ * though submission itself does. The only node that estimates these
+ * correctly refuses to submit at all.
+ *
+ * Sized from a real observed estimate (~128M l2 gas at ~42.5 gfri) with
+ * headroom, and deliberately not more: the account has to cover its own
+ * bound, so an over-generous reservation fails validation as surely as a
+ * too-small one fails execution. This reserves roughly 8 STRK.
+ *
+ * Note the 6 STRK protocol fee is not gas — the pool pulls it as an ERC20
+ * transfer under the allowance approved earlier, so it sits outside these
+ * bounds entirely.
+ */
+const BOUNDS = {
+  // A zero max_price is rejected even when max_amount is zero: the ceiling is
+  // compared against the live gas price regardless of how little is used.
+  l1_gas: { max_amount: 100n, max_price_per_unit: 300_000_000_000_000n },
+  l2_gas: { max_amount: 130_000_000n, max_price_per_unit: 50_000_000_000n },
+  l1_data_gas: { max_amount: 20_000n, max_price_per_unit: 5_000_000_000_000n },
+};
+
+/** Questions to actually buy. Enough that one settlement covers real work. */
+const PROMPTS = [
+  "What is a nullifier in a shielded pool?",
+  "Why do flat per-transaction fees break micropayments?",
+  "What does a payment channel let two parties avoid?",
+  "What is a viewing key used for?",
+  "Explain a high-water mark in one sentence.",
+  "Why batch settlements instead of paying per call?",
+  "What is note maturity on Starknet?",
+  "What does a rate commitment bind?",
+  "Why sign a cumulative total rather than a per-call amount?",
+  "What is an open note?",
+  "Why is metering kept off-chain here?",
+  "What does the anonymizer contract enforce?",
+];
 
 type Client = Awaited<ReturnType<typeof createPrivacyClient>>;
 const txHashes: { step: string; hash: string }[] = [];
@@ -98,24 +159,54 @@ async function main() {
   console.log(`pool charges ${fee} per apply_actions; approving ${feeBuffer} per fee-charged call`);
 
   const escrowAmount = 1000n;
-  const rate = 5n;
-  const totalUnits = 100n;
+  // 1 unit per block, so the metered amount and the unit count coincide —
+  // see the header. rateBlind and channelId must match what the provider
+  // publishes, since the voucher is signed over its commitment.
+  const rate = 1n;
   const rateBlind = 42n;
-  const channelId = 1n;
-  const settlement = rate * totalUnits;
+  const channelId = 7n;
 
   // --- 1. Provider publishes its viewing key. Nobody can do this for it,
   // and without it there is no channel to credit. ---
-  console.log("\n[1/3] provider register");
+  // The provider runs as its own process, priced to match the rate the
+  // contract will verify against.
+  const providerProc: ChildProcess = spawn("npx", ["tsx", "src/server.ts"], {
+    cwd: providerDir,
+    env: {
+      ...process.env,
+      PORT: String(PROVIDER_PORT),
+      TOKEN_ADDRESS: env.tokenAddress,
+      UNITS_PER_BLOCK: rate.toString(),
+      RATE_BLIND: rateBlind.toString(),
+      CHANNEL_ID: channelId.toString(),
+      STARKNET_NETWORK: "starknet-mainnet",
+      PROVIDER_ADDRESS: env.provider.address,
+      ANONYMIZER_ADDRESS,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  providerProc.stdout?.on("data", (d) => process.stdout.write(`[provider] ${d}`));
+  providerProc.stderr?.on("data", (d) => process.stderr.write(`[provider] ${d}`));
+  process.on("exit", () => providerProc.kill());
+  for (let i = 0; i < 40; i++) {
+    try {
+      if ((await fetch(`${PROVIDER_URL}/terms`)).ok) break;
+    } catch {
+      /* not up yet */
+    }
+    await new Promise((r) => setTimeout(r, 300));
+  }
+
+  console.log("\n[1/4] provider register");
   await approve(provider, feeBuffer, "provider");
   const regBlock = await provider.provingBlockId();
   const regBuild = await provider.transfers.build().register().execute({ provingBlockId: regBlock });
-  const regHash = await provider.submit(regBuild.callAndProof);
+  const regHash = await provider.submit(regBuild.callAndProof, BOUNDS);
   txHashes.push({ step: "provider register", hash: regHash });
   console.log(`  registered: ${regHash}`);
 
   // --- 2. Consumer shields the escrow, bundling its own registration. ---
-  console.log("\n[2/3] consumer deposit");
+  console.log("\n[2/4] consumer deposit");
   await approve(consumer, escrowAmount + 2n * feeBuffer, "consumer");
   const depBlock = await consumer.provingBlockId();
   const depBuild = await consumer.transfers
@@ -123,14 +214,27 @@ async function main() {
     .with(env.tokenAddress, (t) => t.deposit({ amount: escrowAmount }))
     .surplusTo(consumer.account.address)
     .execute({ provingBlockId: depBlock });
-  const depHash = await consumer.submit(depBuild.callAndProof);
+  const depHash = await consumer.submit(depBuild.callAndProof, BOUNDS);
   txHashes.push({ step: "consumer deposit", hash: depHash });
   console.log(`  deposited ${escrowAmount}: ${depHash}`);
   await waitBlocks(consumer, 10);
 
-  // --- 3. Settle through the anonymizer: withdraw the escrow to it, declare
-  // the two output notes, and let the contract decide the split. ---
-  console.log("\n[3/3] settle via privacy_invoke");
+  // --- 3. Meter a real session off-chain. No chain contact per call: this
+  // is the part that is free, and the part the single settlement pays for. ---
+  console.log(`\n[3/4] metering ${PROMPTS.length} calls off-chain`);
+  const service = await RemoteEchoService.open(PROVIDER_URL, env.consumer.privateKey, env.tokenAddress);
+  const session = new MeteredSession(service);
+  for (const [i, prompt] of PROMPTS.entries()) {
+    const { result, cost } = await session.call({ prompt });
+    const answer = (result as { completion: string }).completion.replace(/\s+/g, " ");
+    console.log(`  ${String(i + 1).padStart(2)}. (${cost}u) ${answer.slice(0, 88)}…`);
+  }
+  const totalUnits = session.owed;
+  const settlement = totalUnits * rate;
+  console.log(`  ${session.calls} calls served, ${totalUnits} units owed — chain untouched throughout`);
+
+  // --- 4. One settlement for all of it. ---
+  console.log("\n[4/4] settle via privacy_invoke");
   const rateCommitment = hash.computePoseidonHashOnElements([rate, rateBlind]);
   const voucher = signVoucher(channelId, totalUnits, rateCommitment, env.consumer.privateKey);
   const setBlock = await consumer.provingBlockId();
@@ -157,7 +261,7 @@ async function main() {
       };
     })
     .execute({ provingBlockId: setBlock });
-  const setHash = await consumer.submit(setBuild.callAndProof);
+  const setHash = await consumer.submit(setBuild.callAndProof, BOUNDS);
   txHashes.push({ step: "anonymizer settle", hash: setHash });
   console.log(`  settled: ${setHash}`);
 
@@ -173,12 +277,11 @@ async function main() {
   console.log(`\nprovider credited ${credited} (expected settlement ${settlement})`);
 
   const out = resolve(dirname(fileURLToPath(import.meta.url)), "../../../strk20.json");
-  const doc = JSON.parse(
-    (await import("node:fs")).readFileSync(out, "utf8"),
-  ) as Record<string, unknown>;
+  const doc = JSON.parse(readFileSync(out, "utf8")) as Record<string, unknown>;
   doc.transactions = txHashes.map((t) => ({ step: t.step, hash: t.hash, network: "mainnet" }));
   writeFileSync(out, `${JSON.stringify(doc, null, 2)}\n`);
   console.log(`\nwrote ${txHashes.length} transaction hashes to strk20.json`);
+  providerProc.kill();
 
   if (credited !== settlement) {
     throw new Error(`provider credited ${credited}, expected ${settlement}`);

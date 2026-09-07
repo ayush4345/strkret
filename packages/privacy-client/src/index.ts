@@ -1,4 +1,5 @@
 import { Account, RpcProvider, constants } from "starknet";
+import type { ResourceBoundsBN } from "starknet";
 import { createPrivateTransfers } from "@starkware-libs/starknet-privacy-sdk";
 // ContractDiscoveryProvider is packaged under /testing, but it is a real
 // implementation of DiscoveryProviderInterface, not a mock — it is what the
@@ -56,7 +57,7 @@ export interface PrivacyClient {
    * conditionally spread proof details, tip 0, wait for inclusion.
    * See .claude/skills/strk20-privacy-sdk/references/sdk__getting-started.md
    */
-  submit(callAndProof: CallAndProof): Promise<string>;
+  submit(callAndProof: CallAndProof, resourceBounds?: ResourceBoundsBN): Promise<string>;
 }
 
 /**
@@ -80,11 +81,29 @@ export function wrapPrivacyClient(
       // older block avoids both immaturity and reorg invalidation.
       return (await provider.getBlockNumber()) - 10;
     },
-    async submit(callAndProof) {
+    async submit(callAndProof, resourceBounds) {
+      if (process.env.DEBUG_SUBMIT) {
+        console.error(
+          `[submit] proofFacts=${callAndProof.proof.proofFacts?.length ?? 0} ` +
+            `proofBytes=${callAndProof.proof.data?.length ?? 0} ` +
+            `calldata=${callAndProof.call.calldata?.length ?? 0}`,
+        );
+      }
       const proofDetails = callAndProof.proof.proofFacts?.length
         ? { proofFacts: callAndProof.proof.proofFacts, proof: callAndProof.proof.data }
         : {};
-      const tx = await account.execute(callAndProof.call, { tip: 0n, ...proofDetails });
+      // Passing explicit bounds makes starknet.js skip fee estimation.
+      // That matters on mainnet: estimation is a separate RPC round trip, and
+      // a node that does not carry the STRK20 `proof_facts`/`proof` extension
+      // through its estimate path rejects the call as EMPTY_PROOF_FACTS
+      // before the transaction is ever submitted — even though submission
+      // itself would have carried them. Estimating remains the default,
+      // since guessing bounds too low burns gas for nothing.
+      const tx = await account.execute(callAndProof.call, {
+        tip: 0n,
+        ...proofDetails,
+        ...(resourceBounds ? { resourceBounds } : {}),
+      });
       await provider.waitForTransaction(tx.transaction_hash);
       return tx.transaction_hash;
     },

@@ -41,8 +41,18 @@ const PORT = Number(process.env.PORT ?? 4021);
  * The metering, voucher and settlement paths are identical either way; only
  * what is being sold changes.
  */
+/**
+ * Units charged per billable block. This is also the `rate` the settlement
+ * contract multiplies by, and the two have to agree: a voucher's
+ * `total_units` is a COUNT, and the contract pays `units × rate`. The
+ * metering layer accumulates `price()`, so unless a unit costs exactly
+ * `rate`, settling a metered voucher multiplies twice. Keeping it at 1 makes
+ * the accumulated amount and the unit count the same number.
+ */
+const UNITS_PER_BLOCK = BigInt(process.env.UNITS_PER_BLOCK ?? 10);
+
 const service: Service<{ prompt: string }, { completion: string; cost: bigint }> =
-  process.env.OPENAI_API_KEY ? new LlmService(10n) : new EchoService(10n);
+  process.env.OPENAI_API_KEY ? new LlmService(UNITS_PER_BLOCK) : new EchoService(UNITS_PER_BLOCK);
 
 /**
  * The minimum a request can cost. Advertised as `rate` because a per-request
